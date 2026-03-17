@@ -20,6 +20,7 @@
 #include "font/font_mgl_sample6.h"
 #include "protocol.h"
 #include "network.h"
+#include "log.h"
 
 //=============================================================================
 // CONFIGURACIÓN — EDITAR ANTES DE COMPILAR
@@ -60,6 +61,7 @@ typedef enum
 {
     STATE_INIT = 0,
     STATE_CONNECTING,       // Llamando a Net_Open
+    STATE_TCP_WAIT,         // Esperando TCP handshake (SYN_SENT → ESTABLISHED)
     STATE_AUTH_WAIT,        // Esperando CMD_AUTH_OK
     STATE_LOBBY,            // Lobby: lista de salas
     STATE_LOBBY_WAIT,       // Esperando respuesta CMD_ROOM_LIST
@@ -195,6 +197,10 @@ void Sprites_Refresh(void);
 void Game_Init(void)
 {
     u8 i;
+
+    //-- Log: crear fichero de log antes de todo
+    Log_Init();
+    Log_Write("[INIT] MSX Online arrancando");
 
     //-- VDP: Screen 5 (256×212, 16 colores, bitmap)
     VDP_SetMode(VDP_MODE_SCREEN5);
@@ -372,6 +378,7 @@ void Net_SendCreateRoom(void)
     payload[0] = GAME_ID_BALL;
     len = Packet_Build(CMD_ROOM_CREATE, 0, 0, payload, 1);
     Net_Send(g_Conn, g_SendBuf, len);
+    Log_Write("[ROOM] Enviando CREATE");
     HUD_SetStatus("Creando sala...");
 }
 
@@ -389,6 +396,7 @@ void Net_SendJoinRoom(u8 roomId)
     payload[0] = roomId;
     len = Packet_Build(CMD_ROOM_JOIN, 0, 0, payload, 1);
     Net_Send(g_Conn, g_SendBuf, len);
+    Log_WriteHex("[ROOM] Enviando JOIN room=", roomId);
     HUD_SetStatus("Uniendo a sala...");
 }
 
@@ -441,11 +449,13 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
     {
         //-- AUTH ─────────────────────────────────────────────────────────────
         case CMD_AUTH_OK:
+            Log_Write("[AUTH] OK");
             HUD_SetStatus("Cargando salas...");
             Lobby_RequestList();
             break;
 
         case CMD_AUTH_FAIL:
+            Log_Write("[AUTH] FALLIDA");
             g_State = STATE_DISCONNECTED;
             HUD_SetStatus("AUTH FALLIDA!");
             break;
@@ -458,6 +468,10 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
                 g_RoomId        = payload[0];
                 g_PlayerCount   = payload[2];
                 g_MyPid         = payload[3];
+
+                Log_WriteHex("[ROOM] Info room=", g_RoomId);
+                Log_WriteHex("[ROOM] Mi PID=", g_MyPid);
+                Log_WriteHex("[ROOM] Jugadores=", g_PlayerCount);
 
                 // Activar mi jugador y colocarlo en posición de inicio
                 g_Players[g_MyPid].active = TRUE;
@@ -472,6 +486,7 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
 
         case CMD_ROOM_LIST:
             // payload: [N_ROOMS, ROOM_ID, GAME_ID, N_PLAYERS, ...]
+            Log_WriteHex("[LOBBY] Lista recibida, salas=", len >= 1 ? payload[0] : 0);
             if(len >= 1)
             {
                 g_LobbyCount = payload[0];
@@ -490,12 +505,14 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
             break;
 
         case CMD_ROOM_FULL:
+            Log_Write("[ROOM] Sala llena");
             g_State = STATE_LOBBY;
             HUD_SetStatus("SALA LLENA");
             Lobby_RequestList();
             break;
 
         case CMD_ROOM_NOT_FOUND:
+            Log_Write("[ROOM] Sala no existe");
             g_State = STATE_LOBBY;
             HUD_SetStatus("SALA NO EXISTE");
             Lobby_RequestList();
@@ -504,6 +521,7 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
         //-- EVENTOS DE SALA ───────────────────────────────────────────────────
         case CMD_PLAYER_JOINED:
             // payload[0] = PID del nuevo jugador
+            Log_WriteHex("[ROOM] Player joined PID=", len >= 1 ? payload[0] : 0);
             if(len >= 1)
             {
                 newPid = payload[0];
@@ -520,6 +538,7 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
 
         case CMD_PLAYER_LEFT:
             // payload[0] = PID del jugador que salió
+            Log_WriteHex("[ROOM] Player left PID=", len >= 1 ? payload[0] : 0);
             if(len >= 1)
             {
                 newPid = payload[0];
@@ -580,6 +599,7 @@ void Net_Poll(void)
     //-- Verificar que la conexión sigue viva
     if(!Net_IsConnected(g_Conn))
     {
+        Log_Write("[DISC] Conexion perdida");
         g_State = STATE_DISCONNECTED;
         HUD_SetStatus("CONEXION PERDIDA");
         return;
@@ -602,7 +622,8 @@ void Net_Poll(void)
         if(header[0] != PROTO_MAGIC_0 || header[1] != PROTO_MAGIC_1)
         {
             // Byte de basura en el buffer — poco probable con TCP limpio.
-            // Descartamos este "header" y esperamos al siguiente frame.
+            Log_WriteHex("[NET] Magic invalido byte0=", header[0]);
+            Log_WriteHex("[NET] Magic invalido byte1=", header[1]);
             break;
         }
 
@@ -636,31 +657,84 @@ void Net_Poll(void)
 void Net_Connect(void)
 {
     //-- 1. Buscar implementación UNAPI TCP/IP
+    Log_Write("[CONN] Buscando UNAPI...");
     if(Net_Init() != NET_OK)
     {
         g_State = STATE_DISCONNECTED;
         HUD_SetStatus("UNAPI no hallado");
+        Log_Write("[CONN] UNAPI no hallado");
         HUD_Redraw();
         return;
+    }
+    Log_WriteHex("[CONN] UNAPI OK, impl=", g_NetImplCount);
+
+    //-- 1b. Cerrar conexiones TCP fantasma de ejecuciones anteriores
+    //   InterNestor mantiene conexiones abiertas tras salir del programa
+    {
+        u8 c;
+        Log_Write("[CONN] Limpiando conexiones previas...");
+        for(c = 0; c < 4; c++)
+        {
+            tcpip_tcp_abort((int)c);
+        }
+    }
+
+    //-- 1c. Verificar IP local — dump raw del struct para depurar
+    {
+        u8 localIP[4];
+        u8* raw;
+        u8 j;
+        if(Net_GetLocalIP(localIP))
+        {
+            Log_WriteHex("[CONN] IP local=", localIP[0]);
+            Log_WriteHex("[CONN]         .", localIP[1]);
+            Log_WriteHex("[CONN]         .", localIP[2]);
+            Log_WriteHex("[CONN]         .", localIP[3]);
+        }
+        else
+        {
+            Log_Write("[CONN] SIN IP LOCAL");
+        }
+        // Dump raw de los primeros 16 bytes del struct g_IpInfo
+        raw = (u8*)&g_IpInfo;
+        Log_Write("[CONN] IpInfo raw:");
+        for(j = 0; j < 16; j++)
+        {
+            Log_Hex8(raw[j]);
+        }
+        Log_Write("");
     }
 
     HUD_SetStatus("Conectando...");
     HUD_Redraw();
 
     //-- 2. Abrir conexión TCP al servidor
+    Log_WriteHex("[CONN] Destino IP=", SERVER_IP[0]);
+    Log_WriteHex("[CONN]          .", SERVER_IP[1]);
+    Log_WriteHex("[CONN]          .", SERVER_IP[2]);
+    Log_WriteHex("[CONN]          .", SERVER_IP[3]);
+    Log_Write("[CONN] Abriendo conexion TCP...");
     g_Conn = Net_Open(SERVER_IP, SERVER_PORT);
 
     if(g_Conn == NET_INVALID_CONN)
     {
         g_State = STATE_DISCONNECTED;
         HUD_SetStatus("Fallo conexion");
+        // Error codes UNAPI:
+        // 1=NOT_IMP 2=NO_NETWORK 4=INV_PARAM 9=NO_FREE_CONN
+        Log_WriteHex("[CONN] Net_Open FALLO err=", g_NetLastError);
         HUD_Redraw();
         return;
     }
+    Log_WriteHex("[CONN] Handle=", (u8)g_Conn);
 
-    //-- 3. Conexión establecida → enviar auth
-    g_State = STATE_AUTH_WAIT;
-    Net_SendAuth();
+    //-- 3. Esperar a que TCP handshake complete (SYN_SENT → ESTABLISHED)
+    //   tcpip_tcp_open es no-bloqueante: devuelve handle inmediatamente
+    //   pero la conexión aún está en SYN_SENT hasta que llegue SYN-ACK.
+    g_State = STATE_TCP_WAIT;
+    g_PingTimer = 0;    // Reutilizar como timeout de conexión
+    HUD_SetStatus("TCP handshake...");
+    Log_Write("[CONN] Esperando ESTABLISHED...");
 }
 
 //=============================================================================
@@ -951,9 +1025,12 @@ void Game_Shutdown(void)
 {
     u8 i;
 
+    Log_Write("[EXIT] Cerrando...");
+
     // Enviar ROOM_LEAVE si estamos en una sala
     if(g_State == STATE_PLAYING && g_RoomId != 0)
     {
+        Log_Write("[EXIT] Enviando ROOM_LEAVE");
         Net_SendLeave();
         // Dar 2 frames para que el paquete salga
         Halt();
@@ -963,9 +1040,14 @@ void Game_Shutdown(void)
     // Cerrar conexión TCP
     if(g_Conn != NET_INVALID_CONN)
     {
+        Log_Write("[EXIT] Cerrando TCP");
         Net_Close(g_Conn);
         g_Conn = NET_INVALID_CONN;
     }
+
+    // Cerrar fichero de log
+    Log_Write("[EXIT] Fin");
+    Log_Close();
 
     // Ocultar todos los sprites
     for(i = 0; i < MAX_PLAYERS; i++)
@@ -1004,6 +1086,7 @@ void Game_Loop(void)
                 g_State = STATE_EXIT;
             }
             else if(g_State == STATE_DISCONNECTED ||
+                    g_State == STATE_TCP_WAIT     ||
                     g_State == STATE_AUTH_WAIT    ||
                     g_State == STATE_ROOM_WAIT)
             {
@@ -1017,6 +1100,26 @@ void Game_Loop(void)
         {
             case STATE_CONNECTING:
                 Net_Connect();
+                break;
+
+            case STATE_TCP_WAIT:
+                // Esperar a que TCP pase de SYN_SENT a ESTABLISHED
+                // Timeout: ~10 segundos (500 frames a 50Hz)
+                g_PingTimer++;
+                if(Net_IsConnected(g_Conn))
+                {
+                    Log_Write("[CONN] ESTABLISHED OK");
+                    g_State = STATE_AUTH_WAIT;
+                    Log_Write("[AUTH] Enviando auth...");
+                    Net_SendAuth();
+                }
+                else if(g_PingTimer > 500)
+                {
+                    Log_Write("[CONN] Timeout esperando ESTABLISHED");
+                    g_State = STATE_DISCONNECTED;
+                    HUD_SetStatus("Timeout conexion");
+                }
+                HUD_Redraw();
                 break;
 
             case STATE_AUTH_WAIT:

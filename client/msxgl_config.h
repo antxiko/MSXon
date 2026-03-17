@@ -110,7 +110,7 @@
 //-----------------------------------------------------------------------------
 
 #define DOS_USE_FCB					FALSE
-#define DOS_USE_HANDLE				FALSE
+#define DOS_USE_HANDLE				TRUE
 #define DOS_USE_UTILITIES			FALSE
 #define DOS_USE_VALIDATOR			FALSE
 #define DOS_USE_ERROR_HANDLER		FALSE
