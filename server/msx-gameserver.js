@@ -36,6 +36,7 @@ const CMD = {
   ROOM_INFO:      0x23,
   ROOM_FULL:      0x24,
   ROOM_NOT_FOUND: 0x25,
+  ROOM_LIST:      0x26,
   PLAYER_JOINED:  0x30,
   PLAYER_LEFT:    0x31,
   GAME_START:     0x32,
@@ -198,6 +199,23 @@ function handlePacket(socket, state, { cmd, payload }) {
         CMD.ROOM_INFO, roomId, pid,
         Buffer.from([roomId, room.gameId, room.players.size, pid])
       ));
+      break;
+    }
+
+    case CMD.ROOM_LIST: {
+      // Respuesta: [N_ROOMS, ROOM_ID, GAME_ID, N_PLAYERS, ROOM_ID, ...]
+      // Max 84 salas en un payload de 255 bytes (1 + 84*3 = 253)
+      const entries = [];
+      let count = 0;
+      for (const [id, room] of rooms) {
+        if (count >= 84) break;
+        entries.push(id, room.gameId, room.players.size);
+        count++;
+      }
+      const pl = Buffer.alloc(1 + entries.length);
+      pl[0] = count;
+      for (let i = 0; i < entries.length; i++) pl[1 + i] = entries[i];
+      socket.write(buildPacket(CMD.ROOM_LIST, 0, 0, pl));
       break;
     }
 

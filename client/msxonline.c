@@ -61,7 +61,11 @@ typedef enum
     STATE_INIT = 0,
     STATE_CONNECTING,       // Llamando a Net_Open
     STATE_AUTH_WAIT,        // Esperando CMD_AUTH_OK
+    STATE_LOBBY,            // Lobby: lista de salas
+    STATE_LOBBY_WAIT,       // Esperando respuesta CMD_ROOM_LIST
+    STATE_JOIN_INPUT,       // Introduciendo Room ID por teclado
     STATE_CREATE_ROOM,      // Enviando CMD_ROOM_CREATE
+    STATE_JOIN_ROOM,        // Enviando CMD_ROOM_JOIN
     STATE_ROOM_WAIT,        // Esperando CMD_ROOM_INFO
     STATE_PLAYING,          // En partida
     STATE_LEAVING,          // Enviando CMD_ROOM_LEAVE
@@ -77,6 +81,15 @@ typedef struct
     u8      flags;          // STATE_FLAG_*
     bool   active;         // TRUE si está en la sala
 } Player;
+
+// Entrada en la lista de salas del lobby
+#define LOBBY_MAX_ROOMS     20  // Max salas visibles en pantalla
+typedef struct
+{
+    u8  roomId;
+    u8  gameId;
+    u8  players;
+} RoomEntry;
 
 //=============================================================================
 // CONSTANTES DE COLOR POR JUGADOR
@@ -135,6 +148,11 @@ static u8           g_RecvBuf[270];
 static u16          g_PingTimer    = 0;
 static bool        g_HUDDirty     = TRUE;
 static c8           g_StatusMsg[33];       // Mensaje de estado visible en HUD
+static u8           g_JoinDigits[3];       // Dígitos del Room ID (max 255)
+static u8           g_JoinLen      = 0;    // Cuántos dígitos introducidos
+static RoomEntry    g_LobbyRooms[LOBBY_MAX_ROOMS];
+static u8           g_LobbyCount   = 0;    // Salas recibidas del servidor
+static u8           g_LobbyCursor  = 0;    // Sala seleccionada en la lista
 
 // Posiciones de inicio indexadas por PID
 static const u16 g_StartX[5] = { 0, P1_START_X, P2_START_X, P3_START_X, P4_START_X };
@@ -153,9 +171,16 @@ void Net_Connect(void);
 void Net_Poll(void);
 void Net_SendAuth(void);
 void Net_SendCreateRoom(void);
+void Net_SendJoinRoom(u8 roomId);
+void Net_SendRoomList(void);
 void Net_SendLeave(void);
 void Net_SendPing(void);
 void Net_SendState(void);
+void Lobby_Draw(void);
+void Lobby_ProcessInput(void);
+void Lobby_RequestList(void);
+void JoinInput_Draw(void);
+void JoinInput_ProcessKey(void);
 void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len);
 u8   Packet_Build(u8 cmd, u8 room, u8 pid, const u8* payload, u8 payloadLen);
 
@@ -350,6 +375,23 @@ void Net_SendCreateRoom(void)
     HUD_SetStatus("Creando sala...");
 }
 
+void Net_SendRoomList(void)
+{
+    u8 len;
+    len = Packet_Build(CMD_ROOM_LIST, 0, 0, 0, 0);
+    Net_Send(g_Conn, g_SendBuf, len);
+}
+
+void Net_SendJoinRoom(u8 roomId)
+{
+    u8 payload[1];
+    u8 len;
+    payload[0] = roomId;
+    len = Packet_Build(CMD_ROOM_JOIN, 0, 0, payload, 1);
+    Net_Send(g_Conn, g_SendBuf, len);
+    HUD_SetStatus("Uniendo a sala...");
+}
+
 void Net_SendLeave(void)
 {
     u8 len;
@@ -389,6 +431,7 @@ void Net_SendState(void)
 
 void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
 {
+    u8 i;
     u8 newPid;
     Player* p;
 
@@ -398,8 +441,8 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
     {
         //-- AUTH ─────────────────────────────────────────────────────────────
         case CMD_AUTH_OK:
-            g_State = STATE_CREATE_ROOM;
-            HUD_SetStatus("Autenticado  OK");
+            HUD_SetStatus("Cargando salas...");
+            Lobby_RequestList();
             break;
 
         case CMD_AUTH_FAIL:
@@ -427,14 +470,35 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
             }
             break;
 
+        case CMD_ROOM_LIST:
+            // payload: [N_ROOMS, ROOM_ID, GAME_ID, N_PLAYERS, ...]
+            if(len >= 1)
+            {
+                g_LobbyCount = payload[0];
+                if(g_LobbyCount > LOBBY_MAX_ROOMS)
+                    g_LobbyCount = LOBBY_MAX_ROOMS;
+                for(i = 0; i < g_LobbyCount; i++)
+                {
+                    g_LobbyRooms[i].roomId  = payload[1 + i * 3];
+                    g_LobbyRooms[i].gameId  = payload[2 + i * 3];
+                    g_LobbyRooms[i].players = payload[3 + i * 3];
+                }
+                g_LobbyCursor = 0;
+                g_State = STATE_LOBBY;
+                g_HUDDirty = TRUE;
+            }
+            break;
+
         case CMD_ROOM_FULL:
-            g_State = STATE_DISCONNECTED;
+            g_State = STATE_LOBBY;
             HUD_SetStatus("SALA LLENA");
+            Lobby_RequestList();
             break;
 
         case CMD_ROOM_NOT_FOUND:
-            g_State = STATE_DISCONNECTED;
+            g_State = STATE_LOBBY;
             HUD_SetStatus("SALA NO EXISTE");
+            Lobby_RequestList();
             break;
 
         //-- EVENTOS DE SALA ───────────────────────────────────────────────────
@@ -661,6 +725,225 @@ void Input_ProcessMovement(void)
 }
 
 //=============================================================================
+// LOBBY — LISTA DE SALAS
+//=============================================================================
+
+void Lobby_RequestList(void)
+{
+    Net_SendRoomList();
+    g_State = STATE_LOBBY_WAIT;
+}
+
+void Lobby_Draw(void)
+{
+    u8 i;
+    u8 y;
+
+    // Limpiar área de juego
+    VDP_CommandHMMV(0, HUD_HEIGHT, 256, 212 - HUD_HEIGHT, 0x00);
+    VDP_CommandWait();
+
+    //-- Título
+    Print_SetColor(11, 0);  // Amarillo
+    Print_SetPosition(8, HUD_HEIGHT + 4);
+    Print_DrawText("SALA  JUEGO  JUGADORES");
+
+    //-- Línea separadora
+    VDP_CommandHMMV(8, HUD_HEIGHT + 14, 200, 1, 0x77);
+    VDP_CommandWait();
+
+    if(g_LobbyCount == 0)
+    {
+        Print_SetColor(14, 0);  // Gris
+        Print_SetPosition(8, HUD_HEIGHT + 20);
+        Print_DrawText("No hay salas abiertas");
+    }
+    else
+    {
+        for(i = 0; i < g_LobbyCount; i++)
+        {
+            y = HUD_HEIGHT + 18 + i * 10;
+            if(y > 190) break;  // No salirse de pantalla
+
+            // Cursor de selección
+            if(i == g_LobbyCursor)
+            {
+                Print_SetColor(15, 0);  // Blanco (seleccionada)
+                Print_SetPosition(2, y);
+                Print_DrawChar('>');
+            }
+            else
+            {
+                Print_SetColor(7, 0);   // Cian
+            }
+
+            Print_SetPosition(8, y);
+            Print_DrawChar('#');
+            Print_DrawHex8(g_LobbyRooms[i].roomId);
+
+            Print_SetPosition(56, y);
+            Print_DrawHex8(g_LobbyRooms[i].gameId);
+
+            Print_SetPosition(104, y);
+            Print_DrawHex8(g_LobbyRooms[i].players);
+            Print_DrawChar('/');
+            Print_DrawChar('4');
+        }
+    }
+
+    //-- Controles
+    Print_SetColor(14, 0);
+    Print_SetPosition(8, 194);
+    Print_DrawText("C=Crear  ENTER=Unir  R=Refr  ESC");
+}
+
+void Lobby_ProcessInput(void)
+{
+    // Cursor arriba
+    if(Keyboard_IsKeyPushed(KEY_UP))
+    {
+        if(g_LobbyCursor > 0) g_LobbyCursor--;
+        g_HUDDirty = TRUE;
+    }
+
+    // Cursor abajo
+    if(Keyboard_IsKeyPushed(KEY_DOWN))
+    {
+        if(g_LobbyCount > 0 && g_LobbyCursor < g_LobbyCount - 1)
+            g_LobbyCursor++;
+        g_HUDDirty = TRUE;
+    }
+
+    // ENTER — unirse a sala seleccionada
+    if(Keyboard_IsKeyPushed(KEY_RET))
+    {
+        if(g_LobbyCount > 0)
+        {
+            Net_SendJoinRoom(g_LobbyRooms[g_LobbyCursor].roomId);
+            g_State = STATE_ROOM_WAIT;
+            HUD_SetStatus("Uniendo a sala...");
+        }
+    }
+
+    // C — crear sala nueva
+    if(Keyboard_IsKeyPushed(KEY_C))
+    {
+        g_State = STATE_CREATE_ROOM;
+    }
+
+    // R — refrescar lista
+    if(Keyboard_IsKeyPushed(KEY_R))
+    {
+        HUD_SetStatus("Actualizando...");
+        Lobby_RequestList();
+    }
+
+    // J — introducir Room ID manualmente
+    if(Keyboard_IsKeyPushed(KEY_J))
+    {
+        g_JoinLen = 0;
+        g_JoinDigits[0] = 0;
+        g_JoinDigits[1] = 0;
+        g_JoinDigits[2] = 0;
+        g_State = STATE_JOIN_INPUT;
+        g_HUDDirty = TRUE;
+    }
+}
+
+//=============================================================================
+// INPUT DE ROOM ID POR TECLADO
+//=============================================================================
+
+void JoinInput_Draw(void)
+{
+    u8 i;
+
+    // Limpiar área de juego
+    VDP_CommandHMMV(0, HUD_HEIGHT, 256, 212 - HUD_HEIGHT, 0x00);
+    VDP_CommandWait();
+
+    Print_SetColor(15, 0);
+    Print_SetPosition(48, 60);
+    Print_DrawText("Room ID (1-255):");
+
+    // Mostrar dígitos introducidos
+    Print_SetPosition(48, 80);
+    Print_SetColor(11, 0);  // Amarillo
+    for(i = 0; i < g_JoinLen; i++)
+    {
+        Print_DrawChar('0' + g_JoinDigits[i]);
+    }
+    Print_DrawChar('_');  // Cursor
+
+    Print_SetColor(14, 0);
+    Print_SetPosition(48, 110);
+    Print_DrawText("ENTER=OK  ESC=Volver");
+}
+
+// Tabla de teclas numéricas (KEY_0..KEY_9 no son consecutivas en MSXgl)
+static const u8 g_KeyDigits[10] = {
+    KEY_0, KEY_1, KEY_2, KEY_3, KEY_4,
+    KEY_5, KEY_6, KEY_7, KEY_8, KEY_9
+};
+
+void JoinInput_ProcessKey(void)
+{
+    u8 digit;
+    u16 val;
+
+    // Teclas 0-9
+    for(digit = 0; digit <= 9; digit++)
+    {
+        if(Keyboard_IsKeyPushed(g_KeyDigits[digit]) && g_JoinLen < 3)
+        {
+            g_JoinDigits[g_JoinLen] = digit;
+            g_JoinLen++;
+            g_HUDDirty = TRUE;
+        }
+    }
+
+    // Backspace — borrar último dígito
+    if(Keyboard_IsKeyPushed(KEY_BS) && g_JoinLen > 0)
+    {
+        g_JoinLen--;
+        g_HUDDirty = TRUE;
+    }
+
+    // ENTER — confirmar
+    if(Keyboard_IsKeyPushed(KEY_RET))
+    {
+        if(g_JoinLen > 0)
+        {
+            // Convertir dígitos a valor
+            val = 0;
+            if(g_JoinLen >= 1) val = g_JoinDigits[0];
+            if(g_JoinLen >= 2) val = val * 10 + g_JoinDigits[1];
+            if(g_JoinLen >= 3) val = val * 10 + g_JoinDigits[2];
+
+            if(val >= 1 && val <= 255)
+            {
+                g_State = STATE_JOIN_ROOM;
+                Net_SendJoinRoom((u8)val);
+                g_State = STATE_ROOM_WAIT;
+            }
+            else
+            {
+                HUD_SetStatus("ID invalido (1-255)");
+                g_JoinLen = 0;
+                g_HUDDirty = TRUE;
+            }
+        }
+    }
+
+    // ESC — volver al lobby
+    if(Keyboard_IsKeyPushed(KEY_ESC))
+    {
+        HUD_SetStatus("Actualizando...");
+        Lobby_RequestList();
+    }
+}
+
+//=============================================================================
 // LIMPIEZA AL SALIR
 //=============================================================================
 
@@ -706,33 +989,64 @@ void Game_Loop(void)
         // Sincronizar con VBlank (50/60 Hz — ritmo del juego)
         Halt();
 
-        //-- ESC: salir de sala / del juego ─────────────────────────────────
+        // Actualizar buffer de teclado (necesario para Keyboard_IsKeyPushed)
+        Keyboard_Update();
+
+        //-- ESC: salir según contexto ────────────────────────────────────
         if(Keyboard_IsKeyPressed(KEY_ESC))
         {
             if(g_State == STATE_PLAYING)
             {
-                // ESC en partida → salir de sala y terminar
+                g_State = STATE_EXIT;
+            }
+            else if(g_State == STATE_LOBBY)
+            {
                 g_State = STATE_EXIT;
             }
             else if(g_State == STATE_DISCONNECTED ||
                     g_State == STATE_AUTH_WAIT    ||
                     g_State == STATE_ROOM_WAIT)
             {
-                // ESC en pantalla de error/espera → salir
                 g_State = STATE_EXIT;
             }
+            // STATE_JOIN_INPUT maneja ESC internamente (vuelve a lobby)
         }
 
         //-- Máquina de estados ──────────────────────────────────────────────
         switch(g_State)
         {
             case STATE_CONNECTING:
-                Net_Connect();      // Bloquea hasta conectar o fallar
+                Net_Connect();
                 break;
 
             case STATE_AUTH_WAIT:
-                Net_Poll();         // Esperar CMD_AUTH_OK
+                Net_Poll();
                 HUD_Redraw();
+                break;
+
+            case STATE_LOBBY_WAIT:
+                Net_Poll();
+                HUD_Redraw();
+                break;
+
+            case STATE_LOBBY:
+                if(g_HUDDirty)
+                {
+                    HUD_Redraw();
+                    Lobby_Draw();
+                    g_HUDDirty = FALSE;
+                }
+                Lobby_ProcessInput();
+                break;
+
+            case STATE_JOIN_INPUT:
+                if(g_HUDDirty)
+                {
+                    HUD_Redraw();
+                    JoinInput_Draw();
+                    g_HUDDirty = FALSE;
+                }
+                JoinInput_ProcessKey();
                 break;
 
             case STATE_CREATE_ROOM:
@@ -741,7 +1055,7 @@ void Game_Loop(void)
                 break;
 
             case STATE_ROOM_WAIT:
-                Net_Poll();         // Esperar CMD_ROOM_INFO
+                Net_Poll();
                 HUD_Redraw();
                 break;
 
@@ -749,11 +1063,10 @@ void Game_Loop(void)
                 Input_ProcessMovement();
                 Net_Poll();
                 Sprites_Refresh();
-                HUD_Redraw();       // Solo redibuja si g_HUDDirty == TRUE
+                HUD_Redraw();
                 break;
 
             case STATE_DISCONNECTED:
-                // Pantalla de error — esperar ESC (ver bloque ESC arriba)
                 HUD_Redraw();
                 break;
 

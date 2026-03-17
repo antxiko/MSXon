@@ -6,13 +6,6 @@
 #pragma once
 
 //-----------------------------------------------------------------------------
-// TARGET & PLATFORM
-//-----------------------------------------------------------------------------
-
-#define TARGET					TARGET_DOS2	// MSX-DOS 2 program
-#define MSX_VERSION				MSX_2		// MSX2
-
-//-----------------------------------------------------------------------------
 // BIOS MODULE
 //-----------------------------------------------------------------------------
 
@@ -77,7 +70,7 @@
 #define INPUT_USE_ISR_PROTECTION	TRUE
 #define INPUT_JOY_UPDATE			FALSE
 #define INPUT_HOLD_SIGNAL			FALSE
-#define INPUT_KB_UPDATE				FALSE
+#define INPUT_KB_UPDATE				TRUE
 #define INPUT_KB_UPDATE_MIN			0
 #define INPUT_KB_UPDATE_MAX			8
 

@@ -29,6 +29,7 @@
 #define CMD_ROOM_INFO       0x23
 #define CMD_ROOM_FULL       0x24
 #define CMD_ROOM_NOT_FOUND  0x25
+#define CMD_ROOM_LIST       0x26
 // Eventos de sala (broadcasts del servidor)
 #define CMD_PLAYER_JOINED   0x30
 #define CMD_PLAYER_LEFT     0x31

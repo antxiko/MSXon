@@ -71,15 +71,17 @@ const CMD = {
   AUTH: 0x10, AUTH_OK: 0x11, AUTH_FAIL: 0x12,
   ROOM_CREATE: 0x20, ROOM_JOIN: 0x21, ROOM_LEAVE: 0x22,
   ROOM_INFO: 0x23, ROOM_FULL: 0x24, ROOM_NOT_FOUND: 0x25,
+  ROOM_LIST: 0x26,
   PLAYER_JOINED: 0x30, PLAYER_LEFT: 0x31,
-  GAME_START: 0x32,
+  GAME_START: 0x32, GAME_END: 0x33,
   STATE_UPDATE: 0x40,
+  ERROR: 0xFF,
 };
 const AUTH_TOKEN = [0xDE, 0xAD, 0xBE, 0xEF];
 const GAME_ID_BALL = 0x01;
 
 // ── Game state ──────────────────────────────────────────────────
-const STATE = { INIT: 0, CONNECTING: 1, AUTH_WAIT: 2, CREATE_ROOM: 3, ROOM_WAIT: 4, PLAYING: 5, DISCONNECTED: 6 };
+const STATE = { INIT: 0, CONNECTING: 1, AUTH_WAIT: 2, LOBBY: 3, CREATE_ROOM: 4, ROOM_WAIT: 5, PLAYING: 6, DISCONNECTED: 7 };
 let gameState = STATE.INIT;
 let myPid = 0, roomId = 0, playerCount = 0;
 let statusMsg = 'Conectando...';
@@ -100,6 +102,8 @@ let ws = null;
 let recvBuf = new Uint8Array(0);
 let pingTimer = null;
 let pendingJoinRoom = 0; // >0 = join this room after auth
+let lobbyRooms = [];      // [{roomId, gameId, players}, ...]
+let lobbyCursor = 0;
 
 // ── Packet helpers ──────────────────────────────────────────────
 function buildPacket(cmd, room, pid, payload) {
@@ -181,16 +185,31 @@ function handlePacket(cmd, room, pid, payload) {
   switch (cmd) {
     case CMD.AUTH_OK:
       if (pendingJoinRoom > 0) {
-        // Join existing room
         send(buildPacket(CMD.ROOM_JOIN, 0, 0, [pendingJoinRoom]));
         gameState = STATE.ROOM_WAIT;
         setStatus('Uniendose a sala ' + pendingJoinRoom + '...');
         pendingJoinRoom = 0;
       } else {
-        // Create new room
-        setStatus('Auth OK — creando sala...');
-        send(buildPacket(CMD.ROOM_CREATE, 0, 0, [GAME_ID_BALL]));
-        gameState = STATE.ROOM_WAIT;
+        // Request room list → lobby
+        setStatus('Cargando salas...');
+        send(buildPacket(CMD.ROOM_LIST, 0, 0));
+      }
+      break;
+
+    case CMD.ROOM_LIST:
+      if (payload.length >= 1) {
+        const count = payload[0];
+        lobbyRooms = [];
+        for (let i = 0; i < count && (1 + i*3 + 2) < payload.length; i++) {
+          lobbyRooms.push({
+            roomId:  payload[1 + i*3],
+            gameId:  payload[2 + i*3],
+            players: payload[3 + i*3],
+          });
+        }
+        lobbyCursor = 0;
+        gameState = STATE.LOBBY;
+        setStatus('C=Crear  ENTER=Unir  R=Refr  J=ID');
       }
       break;
 
@@ -211,9 +230,13 @@ function handlePacket(cmd, room, pid, payload) {
       break;
 
     case CMD.ROOM_FULL:
-      setStatus('SALA LLENA'); break;
+      setStatus('SALA LLENA — refrescando...');
+      send(buildPacket(CMD.ROOM_LIST, 0, 0));
+      break;
     case CMD.ROOM_NOT_FOUND:
-      setStatus('SALA NO EXISTE'); break;
+      setStatus('SALA NO EXISTE — refrescando...');
+      send(buildPacket(CMD.ROOM_LIST, 0, 0));
+      break;
 
     case CMD.PLAYER_JOINED:
       if (payload.length >= 1) {
@@ -256,23 +279,45 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Escape') {
     if (gameState === STATE.PLAYING) {
       send(buildPacket(CMD.ROOM_LEAVE, roomId, myPid));
+      roomId = 0; myPid = 0;
+      for (let i = 1; i <= 4; i++) players[i].active = false;
+      setStatus('Refrescando salas...');
+      send(buildPacket(CMD.ROOM_LIST, 0, 0));
+    } else if (gameState === STATE.LOBBY) {
+      ws?.close();
+      gameState = STATE.DISCONNECTED;
+      setStatus('Desconectado (ESC)');
+    } else if (gameState === STATE.DISCONNECTED || gameState === STATE.AUTH_WAIT || gameState === STATE.ROOM_WAIT) {
+      ws?.close();
+      gameState = STATE.DISCONNECTED;
+      setStatus('Desconectado (ESC)');
     }
-    ws?.close();
-    gameState = STATE.DISCONNECTED;
-    setStatus('Desconectado (ESC)');
   }
-  if (e.code === 'KeyJ' && gameState !== STATE.PLAYING) {
-    const id = prompt('Room ID para unirse:');
-    if (id && !isNaN(id)) {
-      pendingJoinRoom = parseInt(id);
-      if (gameState === STATE.DISCONNECTED || gameState === STATE.INIT) {
-        connect(); // AUTH_OK handler will send JOIN
-      } else {
-        // Already connected, send JOIN directly
-        send(buildPacket(CMD.ROOM_JOIN, 0, 0, [pendingJoinRoom]));
+
+  // Lobby controls
+  if (gameState === STATE.LOBBY) {
+    if (e.code === 'ArrowUp' && lobbyCursor > 0) lobbyCursor--;
+    if (e.code === 'ArrowDown' && lobbyCursor < lobbyRooms.length - 1) lobbyCursor++;
+    if (e.code === 'Enter' && lobbyRooms.length > 0) {
+      send(buildPacket(CMD.ROOM_JOIN, 0, 0, [lobbyRooms[lobbyCursor].roomId]));
+      gameState = STATE.ROOM_WAIT;
+      setStatus('Uniendose a sala ' + lobbyRooms[lobbyCursor].roomId + '...');
+    }
+    if (e.code === 'KeyC') {
+      send(buildPacket(CMD.ROOM_CREATE, 0, 0, [GAME_ID_BALL]));
+      gameState = STATE.ROOM_WAIT;
+      setStatus('Creando sala...');
+    }
+    if (e.code === 'KeyR') {
+      setStatus('Actualizando...');
+      send(buildPacket(CMD.ROOM_LIST, 0, 0));
+    }
+    if (e.code === 'KeyJ') {
+      const id = prompt('Room ID para unirse:');
+      if (id && !isNaN(id)) {
+        send(buildPacket(CMD.ROOM_JOIN, 0, 0, [parseInt(id)]));
         gameState = STATE.ROOM_WAIT;
-        setStatus('Uniendose a sala ' + pendingJoinRoom + '...');
-        pendingJoinRoom = 0;
+        setStatus('Uniendose a sala ' + id + '...');
       }
     }
   }
@@ -365,6 +410,35 @@ function render() {
   ctx.lineTo(255, HUD_HEIGHT - 1);
   ctx.stroke();
 
+  // Lobby screen
+  if (gameState === STATE.LOBBY) {
+    ctx.font = '8px monospace';
+    ctx.fillStyle = MSX_PALETTE[11];
+    ctx.fillText('SALA  JUEGO  JUGADORES', 8, HUD_HEIGHT + 12);
+
+    ctx.strokeStyle = MSX_PALETTE[7];
+    ctx.beginPath(); ctx.moveTo(8, HUD_HEIGHT + 15); ctx.lineTo(208, HUD_HEIGHT + 15); ctx.stroke();
+
+    if (lobbyRooms.length === 0) {
+      ctx.fillStyle = MSX_PALETTE[14];
+      ctx.fillText('No hay salas abiertas', 8, HUD_HEIGHT + 28);
+    } else {
+      for (let i = 0; i < lobbyRooms.length; i++) {
+        const y = HUD_HEIGHT + 24 + i * 12;
+        if (y > 185) break;
+        ctx.fillStyle = (i === lobbyCursor) ? MSX_PALETTE[15] : MSX_PALETTE[7];
+        if (i === lobbyCursor) ctx.fillText('>', 2, y);
+        ctx.fillText('#' + lobbyRooms[i].roomId, 10, y);
+        ctx.fillText('0x' + lobbyRooms[i].gameId.toString(16).padStart(2,'0'), 58, y);
+        ctx.fillText(lobbyRooms[i].players + '/4', 110, y);
+      }
+    }
+
+    ctx.fillStyle = MSX_PALETTE[14];
+    ctx.fillText('C=Crear  ENTER=Unir  R=Refr  J=ID  ESC', 4, 200);
+    return;
+  }
+
   // Play area grid (subtle)
   ctx.strokeStyle = 'rgba(255,255,255,0.03)';
   for (let gx = 0; gx < 256; gx += 32) {
@@ -378,7 +452,6 @@ function render() {
   for (let i = 1; i <= 4; i++) {
     if (players[i].active) {
       drawBall(players[i].x, players[i].y, PLAYER_COLORS[i]);
-      // Player label
       ctx.font = '6px monospace';
       ctx.fillStyle = MSX_PALETTE[PLAYER_COLORS[i]];
       ctx.fillText('P' + i, players[i].x + 3, players[i].y - 2);
