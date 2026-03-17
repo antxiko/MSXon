@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>MSX Online — PC Client</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #111; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: monospace; color: #ccc; }
+  #screen { border: 2px solid #333; image-rendering: pixelated; cursor: none; }
+  #info { margin-top: 12px; font-size: 13px; color: #666; text-align: center; line-height: 1.6; }
+  #info kbd { background: #333; padding: 2px 6px; border-radius: 3px; color: #eee; }
+  #status { margin-top: 8px; font-size: 14px; color: #0f0; }
+</style>
+</head>
+<body>
+
+<canvas id="screen" width="256" height="212"></canvas>
+<div id="status">Conectando...</div>
+<div id="info">
+  <kbd>&larr;</kbd> <kbd>&uarr;</kbd> <kbd>&darr;</kbd> <kbd>&rarr;</kbd> mover
+  &nbsp;&nbsp;
+  <kbd>ESC</kbd> salir
+  &nbsp;&nbsp;
+  <kbd>J</kbd> join room (pide ID)
+</div>
+
+<script>
+// =============================================================================
+// MSX Online — PC Client (HTML5 Canvas)
+// Simulates MSX2 Screen 5 (256x212) with sprites
+// Connects via WebSocket to bridge.js → TCP game server
+// =============================================================================
+
+const SCALE = 3;
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+canvas.style.width  = (256 * SCALE) + 'px';
+canvas.style.height = (212 * SCALE) + 'px';
+
+const statusEl = document.getElementById('status');
+
+// ── MSX TMS9918 palette (Screen 5 default) ──────────────────────
+const MSX_PALETTE = [
+  '#000000', // 0  Transparent
+  '#000000', // 1  Black
+  '#24DA24', // 2  Medium Green
+  '#6DFF6D', // 3  Light Green
+  '#2424FF', // 4  Dark Blue
+  '#486DFF', // 5  Light Blue
+  '#B62424', // 6  Dark Red
+  '#49DBE7', // 7  Cyan
+  '#FF2424', // 8  Medium Red
+  '#FF6D6D', // 9  Light Red
+  '#DAB624', // 10 Dark Yellow
+  '#DADA6D', // 11 Yellow
+  '#249224', // 12 Dark Green
+  '#DA48B6', // 13 Magenta
+  '#B6B6B6', // 14 Gray
+  '#FFFFFF', // 15 White
+];
+
+// Player colors: P1=15 white, P2=7 cyan, P3=9 red, P4=11 yellow
+const PLAYER_COLORS = [0, 15, 7, 9, 11];
+const PLAYER_NAMES  = ['', 'BLANCO', 'CIAN', 'ROJO', 'AMARILLO'];
+
+// ── Protocol constants ──────────────────────────────────────────
+const MAGIC_0 = 0x46, MAGIC_1 = 0x4D;
+const HEADER_SZ = 6;
+const CMD = {
+  PING: 0x01, PONG: 0x02,
+  AUTH: 0x10, AUTH_OK: 0x11, AUTH_FAIL: 0x12,
+  ROOM_CREATE: 0x20, ROOM_JOIN: 0x21, ROOM_LEAVE: 0x22,
+  ROOM_INFO: 0x23, ROOM_FULL: 0x24, ROOM_NOT_FOUND: 0x25,
+  PLAYER_JOINED: 0x30, PLAYER_LEFT: 0x31,
+  GAME_START: 0x32,
+  STATE_UPDATE: 0x40,
+};
+const AUTH_TOKEN = [0xDE, 0xAD, 0xBE, 0xEF];
+const GAME_ID_BALL = 0x01;
+
+// ── Game state ──────────────────────────────────────────────────
+const STATE = { INIT: 0, CONNECTING: 1, AUTH_WAIT: 2, CREATE_ROOM: 3, ROOM_WAIT: 4, PLAYING: 5, DISCONNECTED: 6 };
+let gameState = STATE.INIT;
+let myPid = 0, roomId = 0, playerCount = 0;
+let statusMsg = 'Conectando...';
+const HUD_HEIGHT = 33;
+const MOVE_SPEED = 2;
+const PING_INTERVAL = 5000; // ms
+
+const startX = [0, 32, 192, 32, 192];
+const startY = [0, HUD_HEIGHT + 20, HUD_HEIGHT + 20, HUD_HEIGHT + 120, HUD_HEIGHT + 120];
+
+const players = [];
+for (let i = 0; i < 5; i++) {
+  players[i] = { x: startX[i], y: startY[i], frame: 0, flags: 0, active: false };
+}
+
+const keysDown = {};
+let ws = null;
+let recvBuf = new Uint8Array(0);
+let pingTimer = null;
+let pendingJoinRoom = 0; // >0 = join this room after auth
+
+// ── Packet helpers ──────────────────────────────────────────────
+function buildPacket(cmd, room, pid, payload) {
+  const pl = payload || [];
+  const pkt = new Uint8Array(HEADER_SZ + pl.length);
+  pkt[0] = MAGIC_0; pkt[1] = MAGIC_1;
+  pkt[2] = cmd; pkt[3] = room; pkt[4] = pid; pkt[5] = pl.length;
+  for (let i = 0; i < pl.length; i++) pkt[HEADER_SZ + i] = pl[i];
+  return pkt;
+}
+
+function send(pkt) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    console.log('[SEND]', [...pkt].map(b => b.toString(16).padStart(2,'0')).join(' '));
+    ws.send(pkt);
+  } else {
+    console.log('[SEND FAILED] ws state:', ws?.readyState);
+  }
+}
+
+// ── Network ─────────────────────────────────────────────────────
+function connect() {
+  const url = `ws://${location.host}`;
+  ws = new WebSocket(url);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    console.log('[WS] onopen fired');
+    setStatus('Autenticando...');
+    gameState = STATE.AUTH_WAIT;
+    send(buildPacket(CMD.AUTH, 0, 0, AUTH_TOKEN));
+    pingTimer = setInterval(() => {
+      send(buildPacket(CMD.PING, roomId, myPid));
+    }, PING_INTERVAL);
+  };
+
+  ws.onmessage = (ev) => {
+    console.log('[WS] onmessage', ev.data.byteLength, 'bytes');
+    const chunk = new Uint8Array(ev.data);
+    const merged = new Uint8Array(recvBuf.length + chunk.length);
+    merged.set(recvBuf); merged.set(chunk, recvBuf.length);
+    recvBuf = merged;
+    parsePackets();
+  };
+
+  ws.onclose = (ev) => {
+    console.log('[WS] onclose code:', ev.code, 'reason:', ev.reason, 'wasClean:', ev.wasClean);
+    gameState = STATE.DISCONNECTED;
+    setStatus('DESCONECTADO');
+    clearInterval(pingTimer);
+  };
+
+  ws.onerror = (ev) => {
+    console.log('[WS] onerror', ev);
+    gameState = STATE.DISCONNECTED;
+    setStatus('ERROR CONEXION');
+  };
+}
+
+function parsePackets() {
+  while (recvBuf.length >= HEADER_SZ) {
+    if (recvBuf[0] !== MAGIC_0 || recvBuf[1] !== MAGIC_1) {
+      let idx = 1;
+      while (idx < recvBuf.length && recvBuf[idx] !== MAGIC_0) idx++;
+      recvBuf = recvBuf.slice(idx);
+      continue;
+    }
+    const len = recvBuf[5];
+    const total = HEADER_SZ + len;
+    if (recvBuf.length < total) break;
+    const cmd = recvBuf[2], room = recvBuf[3], pid = recvBuf[4];
+    const payload = recvBuf.slice(HEADER_SZ, total);
+    recvBuf = recvBuf.slice(total);
+    handlePacket(cmd, room, pid, payload);
+  }
+}
+
+function handlePacket(cmd, room, pid, payload) {
+  switch (cmd) {
+    case CMD.AUTH_OK:
+      if (pendingJoinRoom > 0) {
+        // Join existing room
+        send(buildPacket(CMD.ROOM_JOIN, 0, 0, [pendingJoinRoom]));
+        gameState = STATE.ROOM_WAIT;
+        setStatus('Uniendose a sala ' + pendingJoinRoom + '...');
+        pendingJoinRoom = 0;
+      } else {
+        // Create new room
+        setStatus('Auth OK — creando sala...');
+        send(buildPacket(CMD.ROOM_CREATE, 0, 0, [GAME_ID_BALL]));
+        gameState = STATE.ROOM_WAIT;
+      }
+      break;
+
+    case CMD.AUTH_FAIL:
+      gameState = STATE.DISCONNECTED;
+      setStatus('AUTH FALLIDA');
+      break;
+
+    case CMD.ROOM_INFO:
+      if (payload.length >= 4) {
+        roomId = payload[0]; playerCount = payload[2]; myPid = payload[3];
+        players[myPid].active = true;
+        players[myPid].x = startX[myPid];
+        players[myPid].y = startY[myPid];
+        gameState = STATE.PLAYING;
+        setStatus('Sala ' + roomId + ' — Eres P' + myPid + ' (' + PLAYER_NAMES[myPid] + ')');
+      }
+      break;
+
+    case CMD.ROOM_FULL:
+      setStatus('SALA LLENA'); break;
+    case CMD.ROOM_NOT_FOUND:
+      setStatus('SALA NO EXISTE'); break;
+
+    case CMD.PLAYER_JOINED:
+      if (payload.length >= 1) {
+        const np = payload[0];
+        if (np >= 1 && np <= 4) {
+          players[np].active = true;
+          players[np].x = startX[np]; players[np].y = startY[np];
+          playerCount++;
+        }
+      }
+      break;
+
+    case CMD.PLAYER_LEFT:
+      if (payload.length >= 1) {
+        const np = payload[0];
+        if (np >= 1 && np <= 4) { players[np].active = false; if (playerCount > 0) playerCount--; }
+      }
+      break;
+
+    case CMD.STATE_UPDATE:
+      if (pid >= 1 && pid <= 4 && pid !== myPid && payload.length >= 8) {
+        const p = players[pid];
+        p.x = (payload[0] << 8) | payload[1];
+        p.y = (payload[2] << 8) | payload[3];
+        p.frame = payload[4]; p.flags = payload[5];
+        p.active = true;
+      }
+      break;
+
+    case CMD.GAME_START:
+      setStatus('JUEGO INICIADO'); break;
+    case CMD.PONG:
+      break;
+  }
+}
+
+// ── Input ───────────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  keysDown[e.code] = true;
+  if (e.code === 'Escape') {
+    if (gameState === STATE.PLAYING) {
+      send(buildPacket(CMD.ROOM_LEAVE, roomId, myPid));
+    }
+    ws?.close();
+    gameState = STATE.DISCONNECTED;
+    setStatus('Desconectado (ESC)');
+  }
+  if (e.code === 'KeyJ' && gameState !== STATE.PLAYING) {
+    const id = prompt('Room ID para unirse:');
+    if (id && !isNaN(id)) {
+      pendingJoinRoom = parseInt(id);
+      if (gameState === STATE.DISCONNECTED || gameState === STATE.INIT) {
+        connect(); // AUTH_OK handler will send JOIN
+      } else {
+        // Already connected, send JOIN directly
+        send(buildPacket(CMD.ROOM_JOIN, 0, 0, [pendingJoinRoom]));
+        gameState = STATE.ROOM_WAIT;
+        setStatus('Uniendose a sala ' + pendingJoinRoom + '...');
+        pendingJoinRoom = 0;
+      }
+    }
+  }
+  e.preventDefault();
+});
+
+document.addEventListener('keyup', (e) => { keysDown[e.code] = false; });
+
+function processInput() {
+  if (gameState !== STATE.PLAYING || myPid === 0) return;
+  const me = players[myPid];
+  let moved = false;
+  me.flags = 0;
+
+  if (keysDown['ArrowUp'])    { if (me.y > HUD_HEIGHT)  { me.y -= MOVE_SPEED; moved = true; } }
+  if (keysDown['ArrowDown'])  { if (me.y < 212 - 16)    { me.y += MOVE_SPEED; moved = true; me.flags |= 0x02; } }
+  if (keysDown['ArrowLeft'])  { if (me.x > 0)           { me.x -= MOVE_SPEED; moved = true; } }
+  if (keysDown['ArrowRight']) { if (me.x < 256 - 16)    { me.x += MOVE_SPEED; moved = true; me.flags |= 0x01; } }
+
+  if (moved) {
+    me.frame = (me.frame + 1) & 0x07;
+    const pl = [
+      (me.x >> 8) & 0xFF, me.x & 0xFF,
+      (me.y >> 8) & 0xFF, me.y & 0xFF,
+      me.frame, me.flags, 0, 0
+    ];
+    send(buildPacket(CMD.STATE_UPDATE, roomId, myPid, pl));
+  }
+}
+
+// ── Rendering ───────────────────────────────────────────────────
+function setStatus(msg) { statusMsg = msg; statusEl.textContent = msg; }
+
+function drawBall(x, y, colorIdx) {
+  ctx.fillStyle = MSX_PALETTE[colorIdx];
+  ctx.beginPath();
+  ctx.arc(x + 8, y + 8, 7, 0, Math.PI * 2);
+  ctx.fill();
+  // Highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.beginPath();
+  ctx.arc(x + 6, y + 6, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function render() {
+  // Background
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 256, 212);
+
+  // HUD background
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, 256, HUD_HEIGHT);
+
+  // HUD line 1
+  ctx.font = '8px monospace';
+  ctx.fillStyle = MSX_PALETTE[11]; // yellow
+  ctx.fillText('MSX ONLINE', 2, 8);
+  ctx.fillStyle = MSX_PALETTE[14]; // gray
+  ctx.fillText(' >> ', 66, 8);
+  ctx.fillStyle = MSX_PALETTE[15]; // white
+  ctx.fillText(statusMsg, 86, 8);
+
+  // HUD line 2
+  let hx = 2;
+  if (roomId === 0) {
+    ctx.fillStyle = MSX_PALETTE[8];
+    ctx.fillText('Sin sala', hx, 20);
+  } else {
+    ctx.fillStyle = MSX_PALETTE[7];
+    ctx.fillText('SALA:' + roomId, hx, 20);
+    hx += 48;
+    for (let i = 1; i <= 4; i++) {
+      if (players[i].active) {
+        ctx.fillStyle = MSX_PALETTE[PLAYER_COLORS[i]];
+        const label = '[P' + i + (i === myPid ? '*' : '') + ']';
+        ctx.fillText(label, hx, 20);
+        hx += ctx.measureText(label).width + 4;
+      }
+    }
+    ctx.fillStyle = MSX_PALETTE[14];
+    ctx.fillText('ESC=salir', 200, 20);
+  }
+
+  // HUD separator
+  ctx.strokeStyle = MSX_PALETTE[15];
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, HUD_HEIGHT - 1);
+  ctx.lineTo(255, HUD_HEIGHT - 1);
+  ctx.stroke();
+
+  // Play area grid (subtle)
+  ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+  for (let gx = 0; gx < 256; gx += 32) {
+    ctx.beginPath(); ctx.moveTo(gx, HUD_HEIGHT); ctx.lineTo(gx, 212); ctx.stroke();
+  }
+  for (let gy = HUD_HEIGHT; gy < 212; gy += 32) {
+    ctx.beginPath(); ctx.moveTo(0, gy); ctx.lineTo(256, gy); ctx.stroke();
+  }
+
+  // Sprites
+  for (let i = 1; i <= 4; i++) {
+    if (players[i].active) {
+      drawBall(players[i].x, players[i].y, PLAYER_COLORS[i]);
+      // Player label
+      ctx.font = '6px monospace';
+      ctx.fillStyle = MSX_PALETTE[PLAYER_COLORS[i]];
+      ctx.fillText('P' + i, players[i].x + 3, players[i].y - 2);
+    }
+  }
+}
+
+// ── Game loop ───────────────────────────────────────────────────
+function gameLoop() {
+  processInput();
+  render();
+  requestAnimationFrame(gameLoop);
+}
+
+// ── Start ───────────────────────────────────────────────────────
+// URL param: ?join=N to auto-join room N
+const urlParams = new URLSearchParams(location.search);
+const autoJoin = parseInt(urlParams.get('join'));
+if (autoJoin > 0) pendingJoinRoom = autoJoin;
+
+connect();
+requestAnimationFrame(gameLoop);
+
+</script>
+</body>
+</html>

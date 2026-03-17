@@ -172,6 +172,57 @@ build/
 
 ---
 
+## Cliente PC (`pc-client/`)
+
+Cliente de prueba en HTML5 Canvas que habla el mismo protocolo que el MSX. Permite probar el servidor y jugar en la misma sala que clientes MSX reales desde el navegador.
+
+### Características
+
+- Simula Screen 5 del MSX (256x212 escalado x3)
+- Renderiza sprites como bolas de colores (paleta TMS9918)
+- HUD con info de sala y jugadores
+- Mismo protocolo binario que el cliente MSX
+- Bridge TCP↔WebSocket en Node.js (una sola dependencia: `ws`)
+
+### Uso
+
+```bash
+cd pc-client
+npm install
+node bridge.js [server_ip] [server_port]
+```
+
+Abre `http://localhost:8080` en el navegador. Por defecto conecta a `127.0.0.1:9876`.
+
+Para conectar al VPS:
+
+```bash
+node bridge.js 217.154.107.144 9876
+```
+
+### Controles
+
+| Tecla | Acción |
+|-------|--------|
+| Flechas | Mover |
+| ESC | Salir de sala y desconectar |
+| J | Unirse a una sala existente (pide Room ID) |
+
+### Multijugador (4 ventanas)
+
+La primera pestaña crea sala automáticamente. Para unir más jugadores a la misma sala, usa el parámetro `?join=N`:
+
+```
+http://localhost:8080           ← Crea sala (mira el número en el HUD)
+http://localhost:8080?join=8    ← Se une a sala 8
+http://localhost:8080?join=8    ← Se une a sala 8
+http://localhost:8080?join=8    ← Se une a sala 8
+```
+
+Cada jugador recibe un color distinto: P1=blanco, P2=cian, P3=rojo, P4=amarillo.
+
+---
+
 ## Estructura del proyecto
 
 ```
@@ -187,6 +238,10 @@ MSXonLIVE/
 │   ├── network.h             ← Capa de abstracción UNAPI TCP
 │   ├── protocol.h            ← Protocolo binario (compartido)
 │   └── msxgl_config.h        ← Configuración de MSXgl
+├── pc-client/
+│   ├── bridge.js             ← Bridge TCP↔WebSocket
+│   ├── index.html            ← Cliente HTML5 Canvas
+│   └── package.json
 ├── build/                    ← Binarios compilados
 ├── docs/                     ← Documentación PDF
 └── CLAUDE.md                 ← Contexto técnico completo
