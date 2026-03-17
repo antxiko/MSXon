@@ -1,0 +1,15 @@
+[Unit]
+Description=MSX Online Game Server
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+WorkingDirectory=/opt/msx-server
+ExecStart=/usr/bin/node msx-gameserver.js
+Restart=always
+RestartSec=5
+MemoryMax=64M
+
+[Install]
+WantedBy=multi-user.target

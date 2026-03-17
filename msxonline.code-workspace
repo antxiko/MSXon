@@ -1,0 +1,68 @@
+{
+  "folders": [
+    { "name": "MSX Online",         "path": "." },
+    { "name": "Servidor (Node.js)", "path": "server" },
+    { "name": "Cliente (MSX C)",    "path": "client" },
+    { "name": "Documentación",      "path": "docs" }
+  ],
+  "settings": {
+    // ── Editor general ──────────────────────────────────────
+    "editor.tabSize": 4,
+    "editor.insertSpaces": true,
+    "editor.rulers": [80],
+    "editor.wordWrap": "off",
+    "files.eol": "\n",
+    "files.trimTrailingWhitespace": true,
+
+    // ── C/C++ (cliente MSX) ─────────────────────────────────
+    "C_Cpp.default.compilerPath": "",
+    "C_Cpp.default.cStandard": "c11",
+    "C_Cpp.default.defines": [
+      "MSX", "MSX2", "_SDCC_"
+    ],
+    // Ruta a MSXgl — ajustar si es diferente en tu máquina
+    "C_Cpp.default.includePath": [
+      "${workspaceFolder}/client",
+      "${env:HOME}/msxgl/engine/src",
+      "${env:HOME}/msxgl/engine/src/core",
+      "${env:HOME}/msxgl/engine/src/vdp",
+      "${env:HOME}/msxgl/engine/src/input",
+      "${env:HOME}/msxgl/engine/src/print",
+      "${env:HOME}/msxgl/engine/src/network"
+    ],
+    "C_Cpp.errorSquiggles": "disabled",
+
+    // ── JavaScript (servidor Node.js) ───────────────────────
+    "javascript.suggest.autoImports": true,
+    "javascript.format.enable": true,
+    "node.defaultVersion": "20",
+
+    // ── Makefile ────────────────────────────────────────────
+    "makefile.makefilePath": "client/Makefile",
+
+    // ── Explorador ──────────────────────────────────────────
+    "explorer.fileNesting.enabled": true,
+    "explorer.fileNesting.patterns": {
+      "*.c": "$(capture).h",
+      "Makefile": "*.md"
+    },
+    "files.exclude": {
+      "**/*.rel": true,
+      "**/*.sym": true,
+      "**/*.rst": true,
+      "**/*.lst": true,
+      "**/*.lk":  true,
+      "**/*.noi": true,
+      "**/*.asm": true,
+      "**/*.ihx": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-vscode.cpptools",
+      "ms-vscode.makefile-tools",
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode"
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+# MSXgl library (clone separately: https://github.com/aoineko-fr/MSXgl)
+MSXgl/
+
+# Build artifacts
+*.rel
+*.sym
+*.rst
+*.lst
+*.lk
+*.map
+*.noi
+*.ihx
+*.asm
+*.bin
+
+# macOS
+.DS_Store
+
+# Node
+node_modules/
+
+# Claude Code
+.claude/
