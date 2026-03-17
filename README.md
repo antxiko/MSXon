@@ -81,7 +81,9 @@ sudo ufw allow 9876/tcp
 | `0x10` | AUTH | MSX → SRV |
 | `0x11` | AUTH_OK | SRV → MSX |
 | `0x20` | ROOM_CREATE | MSX → SRV |
+| `0x21` | ROOM_JOIN | MSX → SRV |
 | `0x23` | ROOM_INFO | SRV → MSX |
+| `0x26` | ROOM_LIST | Ambos |
 | `0x30` | PLAYER_JOINED | SRV → MSX |
 | `0x31` | PLAYER_LEFT | SRV → MSX |
 | `0x40` | STATE_UPDATE | Ambos |
@@ -100,7 +102,8 @@ Programa `.COM` para **MSX2 + MSX-DOS 2** compilado con [SDCC](https://sdcc.sour
 - Sprites 16x16 con color por jugador
 - HUD con información de sala y estado
 - Input por teclado (cursores) y joystick
-- Máquina de estados: conexión → auth → sala → juego → salida
+- Lobby con lista de salas activas (crear, unirse, refrescar)
+- Máquina de estados: conexión → auth → lobby → sala → juego → salida
 - Salida limpia a MSX-DOS 2 con ESC
 
 ### Hardware necesario
@@ -202,21 +205,32 @@ node bridge.js 217.154.107.144 9876
 
 ### Controles
 
+**Lobby:**
+
+| Tecla | Acción |
+|-------|--------|
+| Flechas arriba/abajo | Navegar lista de salas |
+| ENTER | Unirse a sala seleccionada |
+| C | Crear sala nueva |
+| R | Refrescar lista |
+| J | Introducir Room ID manualmente |
+| ESC | Desconectar |
+
+**En partida:**
+
 | Tecla | Acción |
 |-------|--------|
 | Flechas | Mover |
-| ESC | Salir de sala y desconectar |
-| J | Unirse a una sala existente (pide Room ID) |
+| ESC | Salir de sala (vuelve al lobby) |
 
 ### Multijugador (4 ventanas)
 
-La primera pestaña crea sala automáticamente. Para unir más jugadores a la misma sala, usa el parámetro `?join=N`:
+Abre varias pestañas en `http://localhost:8080`. Cada una muestra el lobby con las salas activas. Uno crea sala con **C**, los demás la seleccionan y pulsan **ENTER** para unirse.
+
+Para auto-join directo (sin lobby), usa el parámetro `?join=N`:
 
 ```
-http://localhost:8080           ← Crea sala (mira el número en el HUD)
-http://localhost:8080?join=8    ← Se une a sala 8
-http://localhost:8080?join=8    ← Se une a sala 8
-http://localhost:8080?join=8    ← Se une a sala 8
+http://localhost:8080?join=8    ← Se une directamente a sala 8
 ```
 
 Cada jugador recibe un color distinto: P1=blanco, P2=cian, P3=rojo, P4=amarillo.
@@ -231,6 +245,7 @@ MSXonLIVE/
 │   ├── msx-gameserver.js     ← Servidor TCP (único archivo)
 │   ├── test-client.js        ← Cliente de prueba Node.js
 │   ├── deploy.sh             ← Script de despliegue VPS
+│   ├── update.sh             ← Script de actualización VPS
 │   ├── msx-server.service    ← Unidad systemd
 │   └── package.json
 ├── client/

@@ -35,7 +35,8 @@ MSXonLIVE/
 |-- server/
 |   |-- msx-gameserver.js              <-- Servidor TCP Node.js (UNICO archivo de logica)
 |   |-- test-client.js                 <-- Cliente de prueba Node.js (simula MSX sin hardware)
-|   |-- deploy.sh                      <-- Script de despliegue automatizado para VPS
+|   |-- deploy.sh                      <-- Script de despliegue inicial para VPS
+|   |-- update.sh                      <-- Script de actualizacion del VPS
 |   |-- package.json
 |   +-- msx-server.service             <-- Unidad systemd para VPS Ubuntu
 |
@@ -149,6 +150,7 @@ Archivo unico, sin dependencias externas (solo `net` de Node.js).
 - Gestiona salas de hasta 4 jugadores
 - Hace relay de paquetes STATE_UPDATE entre jugadores de la misma sala
 - Broadcast de eventos (PLAYER_JOINED, PLAYER_LEFT, GAME_START)
+- Lista de salas activas via CMD_ROOM_LIST (para el lobby)
 - Buffer acumulativo para manejar chunks TCP parciales (critico con ObsoNET)
 - ECONNRESET silenciado (muy comun con hardware MSX real)
 
@@ -212,19 +214,30 @@ node test-client.js
 
 ### Script de despliegue (server/deploy.sh)
 
-Automatiza la instalacion en VPS Ubuntu: copia archivos, configura systemd, abre firewall.
+Automatiza la instalacion inicial en VPS Ubuntu: copia archivos, configura systemd, abre firewall.
+
+### Actualizacion del VPS (server/update.sh)
+
+Para actualizar el servidor en el VPS tras hacer cambios:
+
+```bash
+cd server && VPS=root@217.154.107.144 && scp msx-gameserver.js update.sh $VPS:/tmp/ && ssh $VPS 'bash /tmp/update.sh'
+```
+
+Copia el nuevo msx-gameserver.js y reinicia el servicio systemd.
 
 ### Flujo de una conexion tipica
 
-1. Cliente MSX conecta por TCP al puerto 9876
+1. Cliente conecta por TCP al puerto 9876
 2. Cliente envia CMD_AUTH con token de 4 bytes
 3. Servidor valida token -> CMD_AUTH_OK (o AUTH_FAIL + destroy)
-4. Cliente envia CMD_ROOM_CREATE con GAME_ID
-5. Servidor crea sala, asigna PID=1 -> CMD_ROOM_INFO
-6. Otros clientes hacen CMD_ROOM_JOIN -> servidor broadcast CMD_PLAYER_JOINED
-7. Bucle de juego: clientes envian CMD_STATE_UPDATE, servidor relay a los demas
-8. CMD_PING cada ~5s para mantener viva la conexion (timeout servidor = 90s)
-9. Al salir: CMD_ROOM_LEAVE -> servidor broadcast CMD_PLAYER_LEFT y limpia sala
+4. Cliente envia CMD_ROOM_LIST -> servidor responde con lista de salas activas
+5. Cliente muestra lobby: lista de salas con jugadores, opciones crear/unir
+6. Cliente envia CMD_ROOM_CREATE o CMD_ROOM_JOIN
+7. Servidor responde CMD_ROOM_INFO (o ROOM_FULL/ROOM_NOT_FOUND -> vuelve a lobby)
+8. Bucle de juego: clientes envian CMD_STATE_UPDATE, servidor relay a los demas
+9. CMD_PING cada ~5s para mantener viva la conexion (timeout servidor = 90s)
+10. Al salir: CMD_ROOM_LEAVE -> servidor broadcast CMD_PLAYER_LEFT y limpia sala
 
 ---
 
@@ -248,6 +261,8 @@ Automatiza la instalacion en VPS Ubuntu: copia archivos, configura systemd, abre
 | 0x21 | ROOM_JOIN       | MSX->SRV  | 1 byte ROOM_ID |
 | 0x22 | ROOM_LEAVE      | MSX->SRV  | - |
 | 0x23 | ROOM_INFO       | SRV->MSX  | [ROOM_ID, GAME_ID, N_PLAYERS, MY_PID] |
+| 0x26 | ROOM_LIST       | MSX->SRV  | - (peticion) |
+| 0x26 | ROOM_LIST       | SRV->MSX  | [N, ROOM_ID, GAME_ID, N_PLAYERS, ...] |
 | 0x30 | PLAYER_JOINED   | SRV->MSX  | 1 byte PID |
 | 0x31 | PLAYER_LEFT     | SRV->MSX  | 1 byte PID |
 | 0x40 | STATE_UPDATE    | Ambos     | 8 bytes (ver abajo) |
@@ -269,13 +284,17 @@ Servidor: `msx-gameserver.js` → `AUTH_TOKEN = Buffer.from([0xDE, 0xAD, 0xBE, 0
 
 ```
 STATE_INIT
-  -> STATE_CONNECTING   (Net_Init + Net_Open)
-  -> STATE_AUTH_WAIT    (enviado CMD_AUTH, esperando CMD_AUTH_OK)
-  -> STATE_CREATE_ROOM  (transicion automatica al recibir AUTH_OK)
-  -> STATE_ROOM_WAIT    (enviado CMD_ROOM_CREATE, esperando CMD_ROOM_INFO)
-  -> STATE_PLAYING      (bucle de juego activo)
-  -> STATE_EXIT         (ESC pulsado -> Game_Shutdown -> Bios_Exit(0))
+  -> STATE_CONNECTING    (Net_Init + Net_Open)
+  -> STATE_AUTH_WAIT     (enviado CMD_AUTH, esperando CMD_AUTH_OK)
+  -> STATE_LOBBY_WAIT    (enviado CMD_ROOM_LIST, esperando respuesta)
+  -> STATE_LOBBY         (lista de salas: cursores, C=crear, ENTER=unir, R=refrescar, J=ID manual)
+  -> STATE_JOIN_INPUT    (introduciendo Room ID por teclado, solo MSX)
+  -> STATE_CREATE_ROOM   (enviando CMD_ROOM_CREATE)
+  -> STATE_ROOM_WAIT     (esperando CMD_ROOM_INFO)
+  -> STATE_PLAYING       (bucle de juego activo)
+  -> STATE_EXIT          (ESC pulsado -> Game_Shutdown -> Bios_Exit(0))
 
+ROOM_FULL / ROOM_NOT_FOUND -> vuelve al LOBBY (no a DISCONNECTED)
 En cualquier estado de error -> STATE_DISCONNECTED -> ESC -> STATE_EXIT
 ```
 
@@ -404,9 +423,10 @@ static const u8 SERVER_IP[4] = { 217, 154, 107, 144 }; // IP del VPS
 
 ## PENDIENTE — Proximos pasos
 
+- [x] **Pantalla de lobby** — lista de salas con jugadores, cursor, crear/unir/refrescar
+- [x] **Unirse a sala existente** — seleccionar de lista o introducir Room ID manualmente
+- [x] **Cliente PC** — HTML5 Canvas via bridge WebSocket, mismo protocolo que MSX
 - [ ] **Test en hardware real** — MSX 8250 con ObsoNET + InterNestor Lite
-- [ ] **Pantalla de lobby** — listar salas disponibles (requiere CMD_ROOM_LIST en servidor)
-- [ ] **Unirse a sala existente** — pantalla de introduccion de ROOM_ID por teclado
 - [ ] **Segundo juego** — definir nuevo GAME_ID y payload STATE_UPDATE diferente
 
 ---
