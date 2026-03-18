@@ -35,6 +35,9 @@ typedef int NetConn;
 static tcpip_unapi_tcp_conn_parms g_TcpParms;
 static tcpip_unapi_ip_info        g_IpInfo;
 
+// ── Resultado de tcpip_tcp_open (global para evitar stack corruption) ──
+static int g_ConnResult     = 0;
+
 // ── Diagnostico ─────────────────────────────────────────────────
 static u8  g_NetLastError   = 0;
 static u8  g_NetImplCount   = 0;
@@ -59,7 +62,6 @@ static u8 Net_Init(void)
 //─────────────────────────────────────────────────────────────────
 static NetConn Net_Open(const u8* ip, u16 port)
 {
-    int conn;
     int err;
     u8 i;
     u8* p;
@@ -86,13 +88,14 @@ static NetConn Net_Open(const u8* ip, u16 port)
     // Flags: 0 = conexion activa transitoria
     g_TcpParms.flags = CONNTYPE_TRANSIENT;
 
-    conn = 0;
-    err = tcpip_tcp_open(&g_TcpParms, &conn);
+    // conn en variable global para evitar corrupcion de stack
+    g_ConnResult = 0;
+    err = tcpip_tcp_open(&g_TcpParms, &g_ConnResult);
     g_NetLastError = (u8)err;
 
     if(err == ERR_OK)
     {
-        return (NetConn)conn;
+        return (NetConn)g_ConnResult;
     }
     return NET_INVALID_CONN;
 }
@@ -163,8 +166,11 @@ static bool Net_IsConnected(NetConn conn)
 //─────────────────────────────────────────────────────────────────
 static u8 Net_Send(NetConn conn, const u8* data, u16 length)
 {
-    return (tcpip_tcp_send((int)conn, (char*)data, (int)length, 1) == ERR_OK)
-        ? NET_OK : NET_ERROR;
+    int err = tcpip_tcp_send((int)conn, (char*)data, (int)length, 1);
+    if(err != ERR_OK) return NET_ERROR;
+    // Flush inmediato — InterNestor/GR8NET pueden bufferizar sin esto
+    tcpip_tcp_flush((int)conn);
+    return NET_OK;
 }
 
 //─────────────────────────────────────────────────────────────────

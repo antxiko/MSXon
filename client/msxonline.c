@@ -362,14 +362,20 @@ void Net_SendAuth(void)
 {
     u8 token[4];
     u8 len;
+    u8 i;
     token[0] = AUTH_TOKEN_0;
     token[1] = AUTH_TOKEN_1;
     token[2] = AUTH_TOKEN_2;
     token[3] = AUTH_TOKEN_3;
     len = Packet_Build(CMD_AUTH, 0, 0, token, 4);
+
+    // Log raw del paquete auth completo
+    Log_Write("[AUTH] Paquete raw:");
+    for(i = 0; i < len; i++) Log_Hex8(g_SendBuf[i]);
+    Log_Write("");
+
     Net_Send(g_Conn, g_SendBuf, len);
-    Net_Flush(g_Conn);
-    Log_Write("[AUTH] Enviando auth...");
+    Log_Write("[AUTH] Enviado OK");
     HUD_SetStatus("Auth enviada...");
 }
 
@@ -670,45 +676,28 @@ void Net_Connect(void)
     }
     Log_WriteHex("[CONN] UNAPI OK, impl=", g_NetImplCount);
 
-    //-- 1b. Cerrar conexiones TCP fantasma de ejecuciones anteriores
-    //   InterNestor mantiene conexiones abiertas tras salir del programa
+    //-- 1b. Esperar a que el stack TCP/IP se estabilice (~500ms)
     {
-        u8 c;
-        Log_Write("[CONN] Limpiando conexiones previas...");
-        for(c = 0; c < 4; c++)
-        {
-            tcpip_tcp_abort((int)c);
-        }
+        u8 w;
+        Log_Write("[CONN] Esperando stack TCP...");
+        for(w = 0; w < 25; w++) Halt();
     }
 
-    //-- 1c. Verificar IP local — dump raw del struct para depurar
-    {
-        u8 localIP[4];
-        u8* raw;
-        u8 j;
-        if(Net_GetLocalIP(localIP))
-        {
-            Log_WriteHex("[CONN] IP local=", localIP[0]);
-            Log_WriteHex("[CONN]         .", localIP[1]);
-            Log_WriteHex("[CONN]         .", localIP[2]);
-            Log_WriteHex("[CONN]         .", localIP[3]);
-        }
-        else
-        {
-            Log_Write("[CONN] SIN IP LOCAL");
-        }
-        // Dump raw de los primeros 16 bytes del struct g_IpInfo
-        raw = (u8*)&g_IpInfo;
-        Log_Write("[CONN] IpInfo raw:");
-        for(j = 0; j < 16; j++)
-        {
-            Log_Hex8(raw[j]);
-        }
-        Log_Write("");
-    }
+    //-- 1c. Verificar IP local — leer directo del struct global
+    tcpip_get_ipinfo(&g_IpInfo);
+    Log_WriteHex("[CONN] IP local=", (u8)g_IpInfo.local_ip[0]);
+    Log_WriteHex("[CONN]         .", (u8)g_IpInfo.local_ip[1]);
+    Log_WriteHex("[CONN]         .", (u8)g_IpInfo.local_ip[2]);
+    Log_WriteHex("[CONN]         .", (u8)g_IpInfo.local_ip[3]);
 
     HUD_SetStatus("Conectando...");
     HUD_Redraw();
+
+    //-- 1d. Pausa antes de abrir conexion (~500ms)
+    {
+        u8 w;
+        for(w = 0; w < 25; w++) Halt();
+    }
 
     //-- 2. Abrir conexión TCP al servidor
     Log_WriteHex("[CONN] Destino IP=", SERVER_IP[0]);
@@ -1121,9 +1110,11 @@ void Game_Loop(void)
 
                     if(tcpState == TCP_STATE_ESTABLISHED)
                     {
+                        u8 w;
                         Log_Write("[CONN] ESTABLISHED OK");
+                        // Esperar 500ms antes de enviar auth
+                        for(w = 0; w < 25; w++) Halt();
                         g_State = STATE_AUTH_WAIT;
-                        Log_Write("[AUTH] Enviando auth...");
                         Net_SendAuth();
                     }
                     else if(tcpState == 0xFF || tcpState == TCP_STATE_UNKNOWN)
