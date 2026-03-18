@@ -362,12 +362,15 @@ void Net_SendAuth(void)
 {
     u8 token[4];
     u8 len;
+    u8 sendResult;
     token[0] = AUTH_TOKEN_0;
     token[1] = AUTH_TOKEN_1;
     token[2] = AUTH_TOKEN_2;
     token[3] = AUTH_TOKEN_3;
     len = Packet_Build(CMD_AUTH, 0, 0, token, 4);
-    Net_Send(g_Conn, g_SendBuf, len);
+    sendResult = Net_Send(g_Conn, g_SendBuf, len);
+    Log_WriteHex("[AUTH] Send result=", sendResult);
+    Log_WriteHex("[AUTH] Pkt len=", len);
     HUD_SetStatus("Auth enviada...");
 }
 
@@ -1106,23 +1109,54 @@ void Game_Loop(void)
                 // Esperar a que TCP pase de SYN_SENT a ESTABLISHED
                 // Timeout: ~10 segundos (500 frames a 50Hz)
                 g_PingTimer++;
-                if(Net_IsConnected(g_Conn))
                 {
-                    Log_Write("[CONN] ESTABLISHED OK");
-                    g_State = STATE_AUTH_WAIT;
-                    Log_Write("[AUTH] Enviando auth...");
-                    Net_SendAuth();
-                }
-                else if(g_PingTimer > 500)
-                {
-                    Log_Write("[CONN] Timeout esperando ESTABLISHED");
-                    g_State = STATE_DISCONNECTED;
-                    HUD_SetStatus("Timeout conexion");
+                    u8 tcpState = Net_GetConnState(g_Conn);
+
+                    // Log cada 50 frames (~1s) para no saturar
+                    if((g_PingTimer & 0x31) == 1)
+                    {
+                        Log_WriteHex("[WAIT] state=", tcpState);
+                        Log_WriteHex("[WAIT] close_reason=", (u8)g_TcpParms.close_reason);
+                        Log_WriteHex("[WAIT] err=", g_NetLastError);
+                    }
+
+                    if(tcpState == TCP_STATE_ESTABLISHED)
+                    {
+                        Log_Write("[CONN] ESTABLISHED OK");
+                        g_State = STATE_AUTH_WAIT;
+                        Log_Write("[AUTH] Enviando auth...");
+                        Net_SendAuth();
+                    }
+                    else if(tcpState == 0xFF || tcpState == TCP_STATE_UNKNOWN)
+                    {
+                        // Conexion perdida o nunca se abrio
+                        Log_WriteHex("[CONN] Fallo TCP state=", tcpState);
+                        Log_WriteHex("[CONN] close_reason=", (u8)g_TcpParms.close_reason);
+                        g_State = STATE_DISCONNECTED;
+                        HUD_SetStatus("Fallo conexion TCP");
+                    }
+                    else if(g_PingTimer > 500)
+                    {
+                        Log_WriteHex("[CONN] Timeout state=", tcpState);
+                        Log_WriteHex("[CONN] close_reason=", (u8)g_TcpParms.close_reason);
+                        g_State = STATE_DISCONNECTED;
+                        HUD_SetStatus("Timeout conexion");
+                    }
                 }
                 HUD_Redraw();
                 break;
 
             case STATE_AUTH_WAIT:
+                // Log cada ~1s para diagnosticar
+                g_PingTimer++;
+                if((g_PingTimer % 50) == 1)
+                {
+                    u8 st = Net_GetConnState(g_Conn);
+                    u16 av = Net_Available(g_Conn);
+                    Log_WriteHex("[AUTHW] state=", st);
+                    Log_WriteHex("[AUTHW] avail_lo=", (u8)(av & 0xFF));
+                    Log_WriteHex("[AUTHW] avail_hi=", (u8)(av >> 8));
+                }
                 Net_Poll();
                 HUD_Redraw();
                 break;
@@ -1180,11 +1214,126 @@ void Game_Loop(void)
 }
 
 //=============================================================================
+// DIAGNOSTICO DE RED (Screen 0 — modo texto MSX-DOS)
+//=============================================================================
+
+// Imprime un byte como 3 digitos decimales (sin ceros a la izquierda)
+void Diag_PrintDec(u8 val)
+{
+    u8 h, t, u;
+    h = val / 100;
+    t = (val % 100) / 10;
+    u = val % 10;
+    if(h > 0) DOS_CharOutput('0' + h);
+    if(h > 0 || t > 0) DOS_CharOutput('0' + t);
+    DOS_CharOutput('0' + u);
+}
+
+// Imprime una IP como xxx.xxx.xxx.xxx en decimal
+void Diag_PrintIP(const u8* ip)
+{
+    u8 i;
+    for(i = 0; i < 4; i++)
+    {
+        Diag_PrintDec(ip[i]);
+        if(i < 3) DOS_CharOutput('.');
+    }
+}
+
+void Diag_ShowNetInfo(void)
+{
+    u8 localIP[4];
+    u8 ok;
+
+    DOS_StringOutput("================================\r\n$");
+    DOS_StringOutput("  MSX ONLINE - NET DIAGNOSTICS\r\n$");
+    DOS_StringOutput("================================\r\n\r\n$");
+
+    //-- 1. Buscar UNAPI
+    DOS_StringOutput("UNAPI TCP/IP: $");
+    ok = (tcpip_enumerate() > 0) ? 1 : 0;
+    if(ok)
+        DOS_StringOutput("ENCONTRADO\r\n$");
+    else
+    {
+        DOS_StringOutput("NO ENCONTRADO\r\n\r\n$");
+        DOS_StringOutput("Pulsa ESPACIO para salir...$");
+        DOS_CharInput();
+        Bios_Exit(0);
+        return;
+    }
+
+    //-- 2. Obtener info IP
+    tcpip_get_ipinfo(&g_IpInfo);
+
+    //-- 3. IP local
+    DOS_StringOutput("IP local    : $");
+    localIP[0] = (u8)g_IpInfo.local_ip[0];
+    localIP[1] = (u8)g_IpInfo.local_ip[1];
+    localIP[2] = (u8)g_IpInfo.local_ip[2];
+    localIP[3] = (u8)g_IpInfo.local_ip[3];
+    Diag_PrintIP(localIP);
+    DOS_StringOutput("\r\n$");
+
+    //-- 4. Mascara de subred
+    DOS_StringOutput("Mascara     : $");
+    localIP[0] = (u8)g_IpInfo.subnet_mask[0];
+    localIP[1] = (u8)g_IpInfo.subnet_mask[1];
+    localIP[2] = (u8)g_IpInfo.subnet_mask[2];
+    localIP[3] = (u8)g_IpInfo.subnet_mask[3];
+    Diag_PrintIP(localIP);
+    DOS_StringOutput("\r\n$");
+
+    //-- 5. Gateway
+    DOS_StringOutput("Gateway     : $");
+    localIP[0] = (u8)g_IpInfo.gateway_ip[0];
+    localIP[1] = (u8)g_IpInfo.gateway_ip[1];
+    localIP[2] = (u8)g_IpInfo.gateway_ip[2];
+    localIP[3] = (u8)g_IpInfo.gateway_ip[3];
+    Diag_PrintIP(localIP);
+    DOS_StringOutput("\r\n$");
+
+    //-- 6. Servidor destino
+    DOS_StringOutput("\r\nServidor    : $");
+    Diag_PrintIP(SERVER_IP);
+    DOS_StringOutput("\r\n$");
+
+    //-- 7. Puerto
+    DOS_StringOutput("Puerto      : $");
+    {
+        u16 port = SERVER_PORT;
+        u8 d[5];
+        u8 i, started;
+        d[0] = (u8)(port / 10000); port %= 10000;
+        d[1] = (u8)(port / 1000);  port %= 1000;
+        d[2] = (u8)(port / 100);   port %= 100;
+        d[3] = (u8)(port / 10);    port %= 10;
+        d[4] = (u8)(port);
+        started = 0;
+        for(i = 0; i < 5; i++)
+        {
+            if(d[i] > 0 || started || i == 4)
+            {
+                DOS_CharOutput('0' + d[i]);
+                started = 1;
+            }
+        }
+    }
+    DOS_StringOutput("\r\n$");
+
+    //-- 8. Esperar tecla
+    DOS_StringOutput("\r\nPulsa ESPACIO para continuar...$");
+    DOS_CharInput();
+    DOS_StringOutput("\r\n$");
+}
+
+//=============================================================================
 // ENTRY POINT (MSX-DOS .COM)
 //=============================================================================
 
 void main(void)
 {
+    Diag_ShowNetInfo();
     Game_Init();
     g_State = STATE_CONNECTING;
     Game_Loop();

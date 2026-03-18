@@ -26,11 +26,13 @@ typedef int NetConn;
 #define NET_OK              1
 #define NET_ERROR           0
 
-// ── Structs globales para llamadas UNAPI ────────────────────────
-// En variables globales (BSS) para evitar stack overflow en Z80.
+// ── Struct global unico para llamadas UNAPI TCP ─────────────────
+// En variable global (BSS) para evitar stack overflow en Z80.
 // NO declarar structs UNAPI como variables locales.
+// Se usa tanto para Net_Open (lectura por tcpip_tcp_open) como para
+// Net_IsConnected/Net_Available/Net_Recv (escritura por tcpip_tcp_state).
+// Tras tcpip_tcp_open, el struct se puede reutilizar libremente.
 static tcpip_unapi_tcp_conn_parms g_TcpParms;
-static tcpip_unapi_tcp_conn_parms g_OpenParms;
 static tcpip_unapi_ip_info        g_IpInfo;
 
 // ── Diagnostico ─────────────────────────────────────────────────
@@ -63,29 +65,29 @@ static NetConn Net_Open(const u8* ip, u16 port)
     u8* p;
 
     // Inicializar struct global a cero
-    p = (u8*)&g_OpenParms;
-    for(i = 0; i < sizeof(g_OpenParms); i++) p[i] = 0;
+    p = (u8*)&g_TcpParms;
+    for(i = 0; i < sizeof(g_TcpParms); i++) p[i] = 0;
 
     // IP destino (4 bytes)
-    g_OpenParms.dest_ip[0] = ip[0];
-    g_OpenParms.dest_ip[1] = ip[1];
-    g_OpenParms.dest_ip[2] = ip[2];
-    g_OpenParms.dest_ip[3] = ip[3];
+    g_TcpParms.dest_ip[0] = ip[0];
+    g_TcpParms.dest_ip[1] = ip[1];
+    g_TcpParms.dest_ip[2] = ip[2];
+    g_TcpParms.dest_ip[3] = ip[3];
 
     // Puerto remoto
-    g_OpenParms.dest_port = (int)port;
+    g_TcpParms.dest_port = (int)port;
 
     // Puerto local aleatorio
-    g_OpenParms.local_port = 0xFFFF;
+    g_TcpParms.local_port = 0xFFFF;
 
     // Timeout (en segundos, 0 = por defecto del stack)
-    g_OpenParms.user_timeout = 0;
+    g_TcpParms.user_timeout = 0;
 
     // Flags: 0 = conexion activa transitoria
-    g_OpenParms.flags = CONNTYPE_TRANSIENT;
+    g_TcpParms.flags = CONNTYPE_TRANSIENT;
 
     conn = 0;
-    err = tcpip_tcp_open(&g_OpenParms, &conn);
+    err = tcpip_tcp_open(&g_TcpParms, &conn);
     g_NetLastError = (u8)err;
 
     if(err == ERR_OK)
@@ -131,14 +133,27 @@ static void Net_Abort(NetConn conn)
 }
 
 //─────────────────────────────────────────────────────────────────
+// Net_GetConnState
+// Consulta el estado TCP de la conexion.
+// Devuelve el conn_state (TCP_STATE_*) o 0xFF si error en la llamada.
+// Tras llamar, g_TcpParms.close_reason tiene el motivo de cierre.
+//─────────────────────────────────────────────────────────────────
+static u8 Net_GetConnState(NetConn conn)
+{
+    int err = tcpip_tcp_state((int)conn, &g_TcpParms);
+    g_NetLastError = (u8)err;
+    if(err != ERR_OK)
+        return 0xFF;
+    return (u8)g_TcpParms.conn_state;
+}
+
+//─────────────────────────────────────────────────────────────────
 // Net_IsConnected
 // Devuelve TRUE si la conexion TCP esta en estado ESTABLISHED.
 //─────────────────────────────────────────────────────────────────
 static bool Net_IsConnected(NetConn conn)
 {
-    if(tcpip_tcp_state((int)conn, &g_TcpParms) != ERR_OK)
-        return FALSE;
-    return (g_TcpParms.conn_state == TCP_STATE_ESTABLISHED) ? TRUE : FALSE;
+    return (Net_GetConnState(conn) == TCP_STATE_ESTABLISHED) ? TRUE : FALSE;
 }
 
 //─────────────────────────────────────────────────────────────────
@@ -148,8 +163,12 @@ static bool Net_IsConnected(NetConn conn)
 //─────────────────────────────────────────────────────────────────
 static u8 Net_Send(NetConn conn, const u8* data, u16 length)
 {
-    return (tcpip_tcp_send((int)conn, (char*)data, (int)length, 1) == ERR_OK)
+    u8 result;
+    result = (tcpip_tcp_send((int)conn, (char*)data, (int)length, 1) == ERR_OK)
         ? NET_OK : NET_ERROR;
+    // Forzar envio inmediato — InterNestor puede bufferizar
+    tcpip_tcp_flush((int)conn);
+    return result;
 }
 
 //─────────────────────────────────────────────────────────────────

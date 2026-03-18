@@ -29,7 +29,7 @@ static const c8 g_HexChars[16] = "0123456789ABCDEF";
 //─────────────────────────────────────────────────────────────────
 // Log_Init — Crea el fichero (trunca si existe)
 //─────────────────────────────────────────────────────────────────
-inline void Log_Init(void)
+static void Log_Init(void)
 {
     g_LogHandle = DOS_CreateHandle(LOG_FILENAME, O_WRONLY, 0x00);
     // Si fallo, queda como LOG_CLOSED (0xFF no es handle valido)
@@ -38,7 +38,7 @@ inline void Log_Init(void)
 //─────────────────────────────────────────────────────────────────
 // Log_StrLen — Longitud de string (no tenemos strlen)
 //─────────────────────────────────────────────────────────────────
-inline u16 Log_StrLen(const c8* s)
+static u16 Log_StrLen(const c8* s)
 {
     u16 len = 0;
     while(s[len]) len++;
@@ -48,7 +48,7 @@ inline u16 Log_StrLen(const c8* s)
 //─────────────────────────────────────────────────────────────────
 // Log_Write — Escribe una linea de texto + CR/LF
 //─────────────────────────────────────────────────────────────────
-inline void Log_Write(const c8* msg)
+static void Log_Write(const c8* msg)
 {
     u16 len;
     static const c8 crlf[2] = { 0x0D, 0x0A };
@@ -65,7 +65,7 @@ inline void Log_Write(const c8* msg)
 //─────────────────────────────────────────────────────────────────
 // Log_Hex8 — Escribe un byte como 2 caracteres hex
 //─────────────────────────────────────────────────────────────────
-inline void Log_Hex8(u8 val)
+static void Log_Hex8(u8 val)
 {
     c8 hex[2];
     if(g_LogHandle == LOG_CLOSED) return;
@@ -78,7 +78,7 @@ inline void Log_Hex8(u8 val)
 // Log_WriteHex — Escribe texto + valor hex en una sola linea
 // Ej: Log_WriteHex("Handle=", 3)  =>  "Handle=03\r\n"
 //─────────────────────────────────────────────────────────────────
-inline void Log_WriteHex(const c8* msg, u8 val)
+static void Log_WriteHex(const c8* msg, u8 val)
 {
     static const c8 crlf[2] = { 0x0D, 0x0A };
     u16 len;
@@ -96,7 +96,7 @@ inline void Log_WriteHex(const c8* msg, u8 val)
 //─────────────────────────────────────────────────────────────────
 // Log_Close — Cierra el fichero
 //─────────────────────────────────────────────────────────────────
-inline void Log_Close(void)
+static void Log_Close(void)
 {
     if(g_LogHandle == LOG_CLOSED) return;
     DOS_CloseHandle(g_LogHandle);

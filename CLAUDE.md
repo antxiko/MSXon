@@ -1,6 +1,6 @@
 # MSX ONLINE — Contexto del proyecto para Claude
-# Ultima actualizacion: 2026-03-17
-# Estado: Cliente compila y ejecuta en MSX2 (probado en openMSX Philips NMS 8250 + MSX-DOS 2)
+# Ultima actualizacion: 2026-03-18
+# Estado: TCP conecta al VPS desde MSX real. Auth enviada, pendiente flush fix (MOL_020)
 
 ---
 
@@ -419,6 +419,27 @@ static const u8 SERVER_IP[4] = { 217, 154, 107, 144 }; // IP del VPS
 - **Causa**: `Print_SetFont(NULL)` no funciona en modo bitmap — la fuente BIOS no se carga bien
 - **Solucion**: Usar fuente embebida `g_Font_MGL_Sample6` via `#include "font/font_mgl_sample6.h"`
 
+### SDCC calling convention — IPs basura y TCP sin datos (2026-03-18)
+- **Problema**: La pantalla de diagnostico mostraba IPs inventadas (58.157.100.135 en vez de 192.168.1.164). El TCP handshake fallaba o los datos no llegaban al servidor.
+- **Causa**: SDCC 4.5.0 usa `sdcccall(1)` por defecto (primer param en registros HL/A). El codigo ASM de UNAPI (`unapi_tcp.asm`) fue escrito para `sdcccall(0)` (todos los params en stack via `get_pointer_to_var`). Resultado: los punteros a structs iban a direcciones equivocadas.
+- **Solucion**: Anadir `__sdcccall(0)` a CADA declaracion extern en `unapi_tcp.h`. Sintaxis: `extern int tcpip_func(...) __sdcccall(0);` (atributo DESPUES de los parentesis, ANTES del punto y coma).
+- **IMPORTANTE**: NO usar `--sdcccall 0` como flag global de compilacion — rompe las funciones `__NAKED` de MSXgl (DOS, VDP, BIOS) que esperan `sdcccall(1)`.
+
+### Modulo DOS no linkado — crash al arrancar (2026-03-18)
+- **Problema**: MOL_014 crasheaba instantaneamente sin mostrar nada
+- **Causa**: `log.h` usa `DOS_CreateHandle`/`DOS_WriteHandle`/`DOS_CloseHandle` pero `"dos"` no estaba en `LibModules` de `project_config.js`. Las funciones saltaban a memoria vacia.
+- **Solucion**: Anadir `"dos"` a `LibModules` en `project_config.js`
+
+### Inline corrompe stack en Z80 (2026-03-18)
+- **Problema**: Funciones `inline` en headers que llaman a funciones `__NAKED` (BDOS/UNAPI) corrompen el stack
+- **Causa**: SDCC Z80 no maneja bien el inlining cuando hay interaccion con ASM `__NAKED`
+- **Solucion**: Usar `static` en vez de `inline` en todas las funciones de `network.h` y `log.h`
+
+### TCP conecta pero datos no llegan al servidor (2026-03-18) — EN INVESTIGACION
+- **Problema**: `tcpip_tcp_send` retorna ERR_OK pero el servidor nunca recibe los bytes
+- **Causa probable**: InterNestor bufferiza los datos y no los envia hasta que se hace flush
+- **Fix en MOL_020**: Se anade `tcpip_tcp_flush()` automaticamente despues de cada `tcpip_tcp_send()` en `Net_Send()`. PENDIENTE DE PROBAR.
+
 ---
 
 ## PENDIENTE — Proximos pasos
@@ -426,7 +447,10 @@ static const u8 SERVER_IP[4] = { 217, 154, 107, 144 }; // IP del VPS
 - [x] **Pantalla de lobby** — lista de salas con jugadores, cursor, crear/unir/refrescar
 - [x] **Unirse a sala existente** — seleccionar de lista o introducir Room ID manualmente
 - [x] **Cliente PC** — HTML5 Canvas via bridge WebSocket, mismo protocolo que MSX
-- [ ] **Test en hardware real** — MSX 8250 con ObsoNET + InterNestor Lite
+- [x] **Pantalla de diagnostico** — muestra IP local, mascara, gateway, servidor, puerto en Screen 0
+- [x] **Conexion TCP al VPS** — handshake completa desde MSX real (192.168.1.164 -> 217.154.107.144)
+- [ ] **Auth + lobby en MSX real** — pendiente fix flush (MOL_020)
+- [ ] **Test multijugador MSX + PC** — un MSX real y un PC client en la misma sala
 - [ ] **Segundo juego** — definir nuevo GAME_ID y payload STATE_UPDATE diferente
 
 ---
