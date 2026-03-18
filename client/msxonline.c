@@ -362,15 +362,14 @@ void Net_SendAuth(void)
 {
     u8 token[4];
     u8 len;
-    u8 sendResult;
     token[0] = AUTH_TOKEN_0;
     token[1] = AUTH_TOKEN_1;
     token[2] = AUTH_TOKEN_2;
     token[3] = AUTH_TOKEN_3;
     len = Packet_Build(CMD_AUTH, 0, 0, token, 4);
-    sendResult = Net_Send(g_Conn, g_SendBuf, len);
-    Log_WriteHex("[AUTH] Send result=", sendResult);
-    Log_WriteHex("[AUTH] Pkt len=", len);
+    Net_Send(g_Conn, g_SendBuf, len);
+    Net_Flush(g_Conn);
+    Log_Write("[AUTH] Enviando auth...");
     HUD_SetStatus("Auth enviada...");
 }
 
@@ -1147,16 +1146,6 @@ void Game_Loop(void)
                 break;
 
             case STATE_AUTH_WAIT:
-                // Log cada ~1s para diagnosticar
-                g_PingTimer++;
-                if((g_PingTimer % 50) == 1)
-                {
-                    u8 st = Net_GetConnState(g_Conn);
-                    u16 av = Net_Available(g_Conn);
-                    Log_WriteHex("[AUTHW] state=", st);
-                    Log_WriteHex("[AUTHW] avail_lo=", (u8)(av & 0xFF));
-                    Log_WriteHex("[AUTHW] avail_hi=", (u8)(av >> 8));
-                }
                 Net_Poll();
                 HUD_Redraw();
                 break;

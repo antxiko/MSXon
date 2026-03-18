@@ -163,12 +163,8 @@ static bool Net_IsConnected(NetConn conn)
 //─────────────────────────────────────────────────────────────────
 static u8 Net_Send(NetConn conn, const u8* data, u16 length)
 {
-    u8 result;
-    result = (tcpip_tcp_send((int)conn, (char*)data, (int)length, 1) == ERR_OK)
+    return (tcpip_tcp_send((int)conn, (char*)data, (int)length, 1) == ERR_OK)
         ? NET_OK : NET_ERROR;
-    // Forzar envio inmediato — InterNestor puede bufferizar
-    tcpip_tcp_flush((int)conn);
-    return result;
 }
 
 //─────────────────────────────────────────────────────────────────
