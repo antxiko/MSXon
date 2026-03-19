@@ -125,13 +125,14 @@ const c8* g_ColorNames[5] = { "", "BLANCO", "CIAN", "ROJO", "AMARILLO" };
 //=============================================================================
 const u8 g_BallPattern[32] =
 {
-    // Filas 0–7, byte izquierdo (pixels 15..8)
+    // MSX 16x16 format: left-top, left-bottom, right-top, right-bottom
+    // Left half, rows 0–7
     0x07, 0x1F, 0x3F, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF,
-    // Filas 0–7, byte derecho  (pixels  7..0)
-    0xE0, 0xF8, 0xFC, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF,
-    // Filas 8–15, byte izquierdo
+    // Left half, rows 8–15
     0xFF, 0xFF, 0xFF, 0xFF, 0x7F, 0x3F, 0x1F, 0x07,
-    // Filas 8–15, byte derecho
+    // Right half, rows 0–7
+    0xE0, 0xF8, 0xFC, 0xFE, 0xFF, 0xFF, 0xFF, 0xFF,
+    // Right half, rows 8–15
     0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xFC, 0xF8, 0xE0
 };
 
@@ -321,8 +322,8 @@ void Sprites_Refresh(void)
     {
         if(g_Players[i].active)
         {
-            // Sprite i-1 (índices 0..3)
-            VDP_SetSpriteSM1(
+            // Sprite Mode 2 (MSX2 Screen 5): posicion + color uniforme
+            VDP_SetSpriteExUniColor(
                 i - 1,                          // índice sprite
                 (u8)(g_Players[i].x & 0xFF),    // X
                 (u8)(g_Players[i].y & 0xFF),    // Y
@@ -332,8 +333,8 @@ void Sprites_Refresh(void)
         }
         else
         {
-            // Ocultar sprite fuera de pantalla (Y=209 = "invisible" en MSX)
-            VDP_SetSpriteSM1(i - 1, 0, 209, 0, 0);
+            // Ocultar sprite fuera de pantalla (Y=209 = "invisible" en MSX2)
+            VDP_SetSpriteExUniColor(i - 1, 0, 209, 0, 0);
         }
     }
 }
@@ -490,6 +491,9 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
                 g_State = STATE_PLAYING;
                 HUD_SetStatus(g_ColorNames[g_MyPid]); // Mostrar color asignado
                 g_HUDDirty = TRUE;
+                // Limpiar area de juego (quitar texto del lobby)
+                VDP_CommandHMMV(0, HUD_HEIGHT, 256, 212 - HUD_HEIGHT, 0x00);
+                VDP_CommandWait();
             }
             break;
 
@@ -745,12 +749,13 @@ void Input_ProcessMovement(void)
     if(g_State != STATE_PLAYING || g_MyPid == 0) return;
 
     me    = &g_Players[g_MyPid];
-    keys  = Joystick_Read(JOY_PORT_1);  // Lee cursores + espacio como joystick 1
+    keys  = Joystick_Read(JOY_PORT_1);  // Joystick fisico (bit=0 cuando pulsado)
     moved = FALSE;
 
     me->flags = 0;
 
-    if(keys & JOY_INPUT_DIR_UP)
+    // Cursores del teclado O joystick
+    if(Keyboard_IsKeyPressed(KEY_UP) || IS_JOY_PRESSED(keys, JOY_INPUT_DIR_UP))
     {
         if(me->y > PLAY_Y0)
         {
@@ -758,7 +763,7 @@ void Input_ProcessMovement(void)
             moved = TRUE;
         }
     }
-    if(keys & JOY_INPUT_DIR_DOWN)
+    if(Keyboard_IsKeyPressed(KEY_DOWN) || IS_JOY_PRESSED(keys, JOY_INPUT_DIR_DOWN))
     {
         if(me->y < PLAY_Y1)
         {
@@ -767,7 +772,7 @@ void Input_ProcessMovement(void)
             me->flags |= STATE_FLAG_DIR_D;
         }
     }
-    if(keys & JOY_INPUT_DIR_LEFT)
+    if(Keyboard_IsKeyPressed(KEY_LEFT) || IS_JOY_PRESSED(keys, JOY_INPUT_DIR_LEFT))
     {
         if(me->x > PLAY_X0)
         {
@@ -775,7 +780,7 @@ void Input_ProcessMovement(void)
             moved = TRUE;
         }
     }
-    if(keys & JOY_INPUT_DIR_RIGHT)
+    if(Keyboard_IsKeyPressed(KEY_RIGHT) || IS_JOY_PRESSED(keys, JOY_INPUT_DIR_RIGHT))
     {
         if(me->x < PLAY_X1)
         {
@@ -1047,7 +1052,7 @@ void Game_Shutdown(void)
     // Ocultar todos los sprites
     for(i = 0; i < MAX_PLAYERS; i++)
     {
-        VDP_SetSpriteSM1(i, 0, 209, 0, 0);
+        VDP_SetSpriteExUniColor(i, 0, 209, 0, 0);
     }
 
     // Volver a MSX-DOS limpiamente via BIOS

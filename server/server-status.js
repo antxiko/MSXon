@@ -17,14 +17,16 @@ const AUTH_TOKEN  = Buffer.from([0xDE, 0xAD, 0xBE, 0xEF]);
 const MAGIC_0 = 0x46; // 'F'
 const MAGIC_1 = 0x4D; // 'M'
 const CMD = {
-    PING:        0x01,
-    PONG:        0x02,
-    AUTH:        0x10,
-    AUTH_OK:     0x11,
-    AUTH_FAIL:   0x12,
-    ROOM_CREATE: 0x20,
-    ROOM_LIST:   0x26,
-    ROOM_INFO:   0x23,
+    PING:         0x01,
+    PONG:         0x02,
+    AUTH:         0x10,
+    AUTH_OK:      0x11,
+    AUTH_FAIL:    0x12,
+    ROOM_CREATE:  0x20,
+    ROOM_JOIN:    0x21,
+    ROOM_LIST:    0x26,
+    ROOM_INFO:    0x23,
+    STATE_UPDATE: 0x40,
 };
 
 let socket = null;
@@ -195,6 +197,85 @@ async function createTestRoom() {
     }
 }
 
+let ghostInterval = null;
+let ghostRoomId = 0;
+let ghostPid = 0;
+
+async function startGhostPlayer() {
+    if (ghostInterval) {
+        console.log('\nJugador fantasma ya activo. Escribe "stop" para pararlo.\n');
+        return;
+    }
+
+    try {
+        await connect();
+
+        // Listar salas para elegir
+        const listPkt = await sendAndWait(CMD.ROOM_LIST, null, CMD.ROOM_LIST);
+        const count = listPkt.payload.length > 0 ? listPkt.payload[0] : 0;
+
+        if (count === 0) {
+            // Crear sala nueva
+            const infoPkt = await sendAndWait(CMD.ROOM_CREATE, Buffer.from([0x01]), CMD.ROOM_INFO);
+            ghostRoomId = infoPkt.payload[0];
+            ghostPid = infoPkt.payload[3];
+            console.log(`\nSala creada: 0x${ghostRoomId.toString(16).padStart(2, '0')} | PID=${ghostPid}`);
+        } else {
+            // Unirse a la primera sala
+            const roomId = listPkt.payload[1];
+            const joinPkt = await sendAndWait(CMD.ROOM_JOIN, Buffer.from([roomId]), CMD.ROOM_INFO);
+            ghostRoomId = joinPkt.payload[0];
+            ghostPid = joinPkt.payload[3];
+            console.log(`\nUnido a sala 0x${ghostRoomId.toString(16).padStart(2, '0')} | PID=${ghostPid}`);
+        }
+
+        // Posicion inicial y movimiento
+        let x = 128;
+        let y = 106;
+        let dx = 2;
+        let dy = 1;
+        let frame = 0;
+
+        console.log('Jugador fantasma activo. Escribe "stop" para parar.\n');
+
+        ghostInterval = setInterval(() => {
+            // Mover rebotando — limites pantalla 256x192 (con margen sprite 16px)
+            x += dx;
+            y += dy;
+            if (x <= 0 || x >= 240) dx = -dx;  // 256 - 16
+            if (y <= 33 || y >= 196) dy = -dy;  // HUD_HEIGHT=33, 212-16
+            if (x < 0) x = 0;
+            if (x > 240) x = 240;
+            if (y < 33) y = 33;
+            if (y > 196) y = 196;
+            frame = (frame + 1) & 0xFF;
+
+            // STATE_UPDATE payload: [X_HI, X_LO, Y_HI, Y_LO, FRAME, FLAGS, DATA_0, DATA_1]
+            const payload = Buffer.from([
+                (x >> 8) & 0xFF, x & 0xFF,
+                (y >> 8) & 0xFF, y & 0xFF,
+                frame, 0, 0, 0
+            ]);
+            if (socket && !socket.destroyed) {
+                socket.write(buildPacket(CMD.STATE_UPDATE, ghostRoomId, ghostPid, payload));
+            }
+        }, 100);  // 10 FPS
+
+    } catch (err) {
+        console.log(`Error: ${err.message}`);
+    }
+}
+
+function stopGhostPlayer() {
+    if (ghostInterval) {
+        clearInterval(ghostInterval);
+        ghostInterval = null;
+        console.log('\nJugador fantasma detenido.\n');
+    } else {
+        console.log('\nNo hay jugador fantasma activo.\n');
+    }
+}
+
 async function pingServer() {
     try {
         await connect();
@@ -219,6 +300,8 @@ function showMenu() {
     console.log('  3. Crear sala de prueba');
     console.log('  4. Ping al servidor');
     console.log('  5. Reconectar');
+    console.log('  6. Jugador fantasma (rebota por pantalla)');
+    console.log('  7. Parar jugador fantasma');
     console.log('  0. Salir');
     console.log('═══════════════════════════════════════');
 }
@@ -245,6 +328,12 @@ async function main() {
                 case '5': case 'reconnect':
                     disconnect();
                     console.log('Desconectado. Se reconectara al siguiente comando.');
+                    break;
+                case '6': case 'ghost': case 'g':
+                    await startGhostPlayer();
+                    break;
+                case '7': case 'stop':
+                    stopGhostPlayer();
                     break;
                 case '0': case 'q': case 'quit': case 'exit':
                     disconnect();
