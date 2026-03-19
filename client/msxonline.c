@@ -155,6 +155,7 @@ static u8           g_JoinLen      = 0;    // Cuántos dígitos introducidos
 static RoomEntry    g_LobbyRooms[LOBBY_MAX_ROOMS];
 static u8           g_LobbyCount   = 0;    // Salas recibidas del servidor
 static u8           g_LobbyCursor  = 0;    // Sala seleccionada en la lista
+static bool         g_LobbyDirty   = FALSE;
 
 // Posiciones de inicio indexadas por PID
 static const u16 g_StartX[5] = { 0, P1_START_X, P2_START_X, P3_START_X, P4_START_X };
@@ -508,7 +509,8 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
                 }
                 g_LobbyCursor = 0;
                 g_State = STATE_LOBBY;
-                g_HUDDirty = TRUE;
+                HUD_SetStatus("Lobby");
+                g_LobbyDirty = TRUE;
             }
             break;
 
@@ -516,6 +518,7 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
             Log_Write("[ROOM] Sala llena");
             g_State = STATE_LOBBY;
             HUD_SetStatus("SALA LLENA");
+            g_LobbyDirty = TRUE;
             Lobby_RequestList();
             break;
 
@@ -523,6 +526,7 @@ void Net_HandlePacket(u8 cmd, u8 room, u8 pid, const u8* payload, u8 len)
             Log_Write("[ROOM] Sala no existe");
             g_State = STATE_LOBBY;
             HUD_SetStatus("SALA NO EXISTE");
+            g_LobbyDirty = TRUE;
             Lobby_RequestList();
             break;
 
@@ -868,7 +872,7 @@ void Lobby_ProcessInput(void)
     if(Keyboard_IsKeyPushed(KEY_UP))
     {
         if(g_LobbyCursor > 0) g_LobbyCursor--;
-        g_HUDDirty = TRUE;
+        g_LobbyDirty = TRUE;
     }
 
     // Cursor abajo
@@ -876,7 +880,7 @@ void Lobby_ProcessInput(void)
     {
         if(g_LobbyCount > 0 && g_LobbyCursor < g_LobbyCount - 1)
             g_LobbyCursor++;
-        g_HUDDirty = TRUE;
+        g_LobbyDirty = TRUE;
     }
 
     // ENTER — unirse a sala seleccionada
@@ -1147,11 +1151,10 @@ void Game_Loop(void)
                 break;
 
             case STATE_LOBBY:
-                if(g_HUDDirty)
+                if(g_LobbyDirty)
                 {
-                    HUD_Redraw();
                     Lobby_Draw();
-                    g_HUDDirty = FALSE;
+                    g_LobbyDirty = FALSE;
                 }
                 Lobby_ProcessInput();
                 break;

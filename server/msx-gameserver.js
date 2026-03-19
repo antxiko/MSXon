@@ -52,7 +52,6 @@ const MAGIC_1 = 0x4D; // 'M'
 // ── Estado global ──────────────────────────────────────────────
 // rooms: Map<roomId, { gameId: u8, players: Map<pid, socket> }>
 const rooms   = new Map();
-let nextRoomId = 1;
 
 // ── Utilidades de protocolo ────────────────────────────────────
 
@@ -77,8 +76,12 @@ function broadcastToRoom(room, excludePid, packet) {
 }
 
 function createRoom(gameId) {
-  const id = nextRoomId++;
-  if (nextRoomId > 255) nextRoomId = 1;
+  // Reusar el primer ID libre (1..255)
+  let id = null;
+  for (let i = 1; i <= 255; i++) {
+    if (!rooms.has(i)) { id = i; break; }
+  }
+  if (id === null) return null; // 255 salas llenas
   rooms.set(id, { gameId, players: new Map() });
   return id;
 }
@@ -127,8 +130,7 @@ function leaveRoom(socket, state) {
   console.log(`[${socket.remoteAddress}] Abandona sala ${state.roomId} (P${state.pid})`);
 
   if (room.players.size === 0) {
-    rooms.delete(state.roomId);
-    console.log(`Sala ${state.roomId} eliminada (vacía)`);
+    console.log(`Sala ${state.roomId} vacia (persiste)`);
   } else {
     broadcastToRoom(room, null,
       buildPacket(CMD.PLAYER_LEFT, state.roomId, 0, Buffer.from([state.pid]))
@@ -291,4 +293,48 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`MSX Game Server escuchando en :${PORT}`);
   console.log(`Máx ${MAX_PLAYERS_PER_ROOM} jugadores/sala · 255 salas simultáneas`);
   console.log(`Timeout por conexión: ${TIMEOUT_MS / 1000}s`);
+  console.log(`Comandos: rooms, connections, help`);
+});
+
+// ── Consola interactiva ────────────────────────────────────────
+const readline = require('readline');
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+rl.on('line', (line) => {
+  const cmd = line.trim().toLowerCase();
+  if (cmd === 'rooms' || cmd === 'r') {
+    if (rooms.size === 0) {
+      console.log('No hay salas abiertas');
+    } else {
+      console.log(`${rooms.size} sala(s):`);
+      for (const [id, room] of rooms) {
+        const pids = [...room.players.keys()].join(', ');
+        console.log(`  Sala ${id} (0x${id.toString(16).padStart(2,'0')}) | juego=${room.gameId} | jugadores=${room.players.size}/4 [${pids}]`);
+      }
+    }
+  } else if (cmd === 'connections' || cmd === 'c') {
+    console.log(`${server.connections ?? 'N/A'} conexiones activas`);
+  } else if (cmd === 'clear') {
+    // Borrar salas vacias
+    let cleared = 0;
+    for (const [id, room] of rooms) {
+      if (room.players.size === 0) {
+        rooms.delete(id);
+        cleared++;
+      }
+    }
+    console.log(`${cleared} sala(s) vacia(s) eliminada(s). Quedan ${rooms.size} sala(s).`);
+  } else if (cmd === 'clearall') {
+    // Borrar TODAS las salas (desconecta jugadores)
+    for (const [id, room] of rooms) {
+      for (const [pid, sock] of room.players) {
+        if (!sock.destroyed) sock.destroy();
+      }
+    }
+    rooms.clear();
+    console.log('Todas las salas eliminadas.');
+  } else if (cmd === 'help' || cmd === 'h') {
+    console.log('Comandos: rooms (r), connections (c), clear, clearall, help (h)');
+  } else if (cmd) {
+    console.log(`Comando desconocido: ${cmd}`);
+  }
 });
