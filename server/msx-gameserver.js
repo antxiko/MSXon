@@ -1,7 +1,7 @@
 'use strict';
 
 // =============================================================================
-// msx-gameserver.js — MSX Online Game Server v1.0
+// msx-gameserver.js — MSX Online Game Server v2.0
 // Stack: Node.js 20 LTS · TCP raw · Sin dependencias externas
 //
 // Protocolo: header binario 6 bytes + payload 0..255 bytes
@@ -19,8 +19,10 @@ const net  = require('net');
 
 // ── Configuración ─────────────────────────────────────────────
 const PORT               = 9876;
-const AUTH_TOKEN         = Buffer.from([0xDE, 0xAD, 0xBE, 0xEF]); // Cambiar en producción
-const MAX_PLAYERS_PER_ROOM = 4;
+const AUTH_TOKEN         = Buffer.from(
+  (process.env.MSX_AUTH_TOKEN || 'DEADBEEF'), 'hex'
+);
+const MAX_PLAYERS_LIMIT  = 16;       // Techo absoluto por sala
 const TIMEOUT_MS         = 90_000;   // 90s — generoso para el Z80
 
 // ── Protocolo ─────────────────────────────────────────────────
@@ -50,7 +52,7 @@ const MAGIC_0 = 0x46; // 'F'
 const MAGIC_1 = 0x4D; // 'M'
 
 // ── Estado global ──────────────────────────────────────────────
-// rooms: Map<roomId, { gameId: u8, players: Map<pid, socket> }>
+// rooms: Map<roomId, { gameId: u8, maxPlayers: u8, players: Map<pid, socket> }>
 const rooms   = new Map();
 
 // ── Utilidades de protocolo ────────────────────────────────────
@@ -75,19 +77,19 @@ function broadcastToRoom(room, excludePid, packet) {
   }
 }
 
-function createRoom(gameId) {
+function createRoom(gameId, maxPlayers) {
   // Reusar el primer ID libre (1..255)
   let id = null;
   for (let i = 1; i <= 255; i++) {
     if (!rooms.has(i)) { id = i; break; }
   }
   if (id === null) return null; // 255 salas llenas
-  rooms.set(id, { gameId, players: new Map() });
+  rooms.set(id, { gameId, maxPlayers, players: new Map() });
   return id;
 }
 
 function getNextPid(room) {
-  for (let pid = 1; pid <= MAX_PLAYERS_PER_ROOM; pid++) {
+  for (let pid = 1; pid <= room.maxPlayers; pid++) {
     if (!room.players.has(pid)) return pid;
   }
   return null; // Sala llena
@@ -170,13 +172,24 @@ function handlePacket(socket, state, { cmd, payload }) {
 
     case CMD.ROOM_CREATE: {
       const gameId = payload[0] ?? 0x01;
-      const roomId = createRoom(gameId);
+      if (!gameId) {
+        socket.write(buildPacket(CMD.ERROR, 0, 0, Buffer.from([0x03])));
+        break;
+      }
+      const maxPlayers = Math.min(payload[1] ?? 4, MAX_PLAYERS_LIMIT);
+      // Auto-leave si ya estaba en una sala
+      if (state.roomId) leaveRoom(socket, state);
+      const roomId = createRoom(gameId, maxPlayers);
+      if (roomId === null) {
+        socket.write(buildPacket(CMD.ERROR, 0, 0, Buffer.from([0x02])));
+        break;
+      }
       const room   = rooms.get(roomId);
       const pid    = 1; // El creador siempre es P1 (host)
       room.players.set(pid, socket);
       state.roomId = roomId;
       state.pid    = pid;
-      console.log(`[${socket.remoteAddress}] Crea sala ${roomId} (game=0x${gameId.toString(16)})`);
+      console.log(`[${socket.remoteAddress}] Crea sala ${roomId} (game=0x${gameId.toString(16)}, max=${maxPlayers})`);
       socket.write(buildPacket(
         CMD.ROOM_INFO, roomId, pid,
         Buffer.from([roomId, gameId, 1, pid])
@@ -190,6 +203,8 @@ function handlePacket(socket, state, { cmd, payload }) {
       if (!room) { socket.write(buildPacket(CMD.ROOM_NOT_FOUND)); break; }
       const pid = getNextPid(room);
       if (!pid) { socket.write(buildPacket(CMD.ROOM_FULL)); break; }
+      // Auto-leave si ya estaba en una sala
+      if (state.roomId) leaveRoom(socket, state);
       room.players.set(pid, socket);
       state.roomId = roomId;
       state.pid    = pid;
@@ -291,7 +306,7 @@ server.on('error', (err) => console.error('Error servidor:', err));
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`MSX Game Server escuchando en :${PORT}`);
-  console.log(`Máx ${MAX_PLAYERS_PER_ROOM} jugadores/sala · 255 salas simultáneas`);
+  console.log(`Máx ${MAX_PLAYERS_LIMIT} jugadores/sala · 255 salas simultáneas`);
   console.log(`Timeout por conexión: ${TIMEOUT_MS / 1000}s`);
   console.log(`Comandos: rooms, connections, help`);
 });
@@ -308,11 +323,13 @@ rl.on('line', (line) => {
       console.log(`${rooms.size} sala(s):`);
       for (const [id, room] of rooms) {
         const pids = [...room.players.keys()].join(', ');
-        console.log(`  Sala ${id} (0x${id.toString(16).padStart(2,'0')}) | juego=${room.gameId} | jugadores=${room.players.size}/4 [${pids}]`);
+        console.log(`  Sala ${id} (0x${id.toString(16).padStart(2,'0')}) | juego=${room.gameId} | jugadores=${room.players.size}/${room.maxPlayers} [${pids}]`);
       }
     }
   } else if (cmd === 'connections' || cmd === 'c') {
-    console.log(`${server.connections ?? 'N/A'} conexiones activas`);
+    server.getConnections((err, count) => {
+      console.log(`${err ? 'N/A' : count} conexiones activas`);
+    });
   } else if (cmd === 'clear') {
     // Borrar salas vacias
     let cleared = 0;

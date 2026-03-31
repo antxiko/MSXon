@@ -29,6 +29,11 @@ const CMD = {
     STATE_UPDATE: 0x40,
 };
 
+const GAME_NAMES = {
+    0x01: 'Prueba (sprites)',
+    0x02: 'Damas',
+};
+
 let socket = null;
 let authenticated = false;
 let buffer = Buffer.alloc(0);
@@ -152,9 +157,10 @@ async function showRooms() {
                 const roomId  = pkt.payload[off];
                 const gameId  = pkt.payload[off + 1];
                 const players = pkt.payload[off + 2];
-                const roomStr = `0x${roomId.toString(16).padStart(2, '0')} `.padEnd(5);
-                const gameStr = `  ${gameId}     `.substring(0, 9);
-                const playStr = `  ${players}/4              `.substring(0, 19);
+                const gameName = GAME_NAMES[gameId] || `Juego 0x${gameId.toString(16).padStart(2, '0')}`;
+                const roomStr = `0x${roomId.toString(16).padStart(2, '0')}`.padEnd(5);
+                const gameStr = ` ${gameName}`.padEnd(9).substring(0, 9);
+                const playStr = ` ${players} jugador(es)`.padEnd(19).substring(0, 19);
                 console.log(`║ ${roomStr}║${gameStr}║${playStr}║`);
             }
         }
@@ -183,15 +189,35 @@ async function showStatus() {
     console.log('');
 }
 
-async function createTestRoom() {
+function askQuestion(rl, question) {
+    return new Promise((resolve) => {
+        rl.question(question, (answer) => resolve(answer.trim()));
+    });
+}
+
+async function createTestRoom(rl) {
     try {
+        console.log('\nJuegos disponibles:');
+        for (const [id, name] of Object.entries(GAME_NAMES)) {
+            console.log(`  ${id}. ${name}`);
+        }
+        const gameChoice = await askQuestion(rl, 'Game ID (1-255): ');
+        const gameId = parseInt(gameChoice, 10);
+        if (!gameId || gameId < 1 || gameId > 255) {
+            console.log('Game ID no valido.');
+            return;
+        }
+        const maxChoice = await askQuestion(rl, 'Max jugadores (1-16, default 4): ');
+        const maxPlayers = parseInt(maxChoice, 10) || 4;
+
         await connect();
-        const pkt = await sendAndWait(CMD.ROOM_CREATE, Buffer.from([0x01]), CMD.ROOM_INFO);
+        const pkt = await sendAndWait(CMD.ROOM_CREATE, Buffer.from([gameId, Math.min(maxPlayers, 16)]), CMD.ROOM_INFO);
         const roomId  = pkt.payload[0];
-        const gameId  = pkt.payload[1];
+        const gId     = pkt.payload[1];
         const players = pkt.payload[2];
         const myPid   = pkt.payload[3];
-        console.log(`\nSala creada: 0x${roomId.toString(16).padStart(2, '0')} | juego=${gameId} | jugadores=${players} | tu PID=${myPid}\n`);
+        const gameName = GAME_NAMES[gId] || `Juego 0x${gId.toString(16).padStart(2, '0')}`;
+        console.log(`\nSala creada: 0x${roomId.toString(16).padStart(2, '0')} | ${gameName} | jugadores=${players} | max=${maxPlayers} | tu PID=${myPid}\n`);
     } catch (err) {
         console.log(`Error: ${err.message}`);
     }
@@ -320,7 +346,7 @@ async function main() {
                     await showStatus();
                     break;
                 case '3': case 'create': case 'c':
-                    await createTestRoom();
+                    await createTestRoom(rl);
                     break;
                 case '4': case 'ping': case 'p':
                     await pingServer();
