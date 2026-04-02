@@ -44,6 +44,7 @@ const CMD = {
   GAME_START:     0x32,
   GAME_END:       0x33,
   STATE_UPDATE:   0x40,
+  WORLD_STATE:    0x41,
   ERROR:          0xFF,
 };
 
@@ -51,8 +52,14 @@ const PROTO_HEADER_SZ = 6;
 const MAGIC_0 = 0x46; // 'F'
 const MAGIC_1 = 0x4D; // 'M'
 
+// ── Constantes de modo de sala ────────────────────────────────
+const ROOM_MODE_RELAY     = 0;  // Relay puro (legacy, Ball Demo actual)
+const ROOM_MODE_AGGREGATE = 1;  // Servidor agrega estado (WORLD_STATE)
+const DEFAULT_TICK_MS     = 100; // 10Hz por defecto
+
 // ── Estado global ──────────────────────────────────────────────
-// rooms: Map<roomId, { gameId: u8, maxPlayers: u8, players: Map<pid, socket> }>
+// rooms: Map<roomId, { gameId, maxPlayers, mode, tickMs, tickInterval, tickSeq, players }>
+// players: Map<pid, { socket, state: Buffer|null, lastUpdate: number }>
 const rooms   = new Map();
 
 // ── Utilidades de protocolo ────────────────────────────────────
@@ -70,21 +77,31 @@ function buildPacket(cmd, roomId = 0, pid = 0, payload = Buffer.alloc(0)) {
 }
 
 function broadcastToRoom(room, excludePid, packet) {
-  for (const [pid, sock] of room.players) {
+  for (const [pid, pdata] of room.players) {
+    const sock = pdata.socket || pdata; // Soportar ambos formatos
     if (pid !== excludePid && !sock.destroyed) {
       sock.write(packet);
     }
   }
 }
 
-function createRoom(gameId, maxPlayers) {
+function createRoom(gameId, maxPlayers, mode) {
   // Reusar el primer ID libre (1..255)
   let id = null;
   for (let i = 1; i <= 255; i++) {
     if (!rooms.has(i)) { id = i; break; }
   }
   if (id === null) return null; // 255 salas llenas
-  rooms.set(id, { gameId, maxPlayers, players: new Map() });
+  rooms.set(id, {
+    gameId,
+    maxPlayers,
+    mode:         mode || ROOM_MODE_RELAY,
+    tickMs:       DEFAULT_TICK_MS,
+    tickInterval: null,
+    tickSeq:      0,
+    gameStarted:  false,
+    players:      new Map(),
+  });
   return id;
 }
 
@@ -93,6 +110,69 @@ function getNextPid(room) {
     if (!room.players.has(pid)) return pid;
   }
   return null; // Sala llena
+}
+
+// ── WORLD_STATE: agregación de estado ─────────────────────────
+
+function broadcastWorldState(roomId) {
+  const room = rooms.get(roomId);
+  if (!room) return;
+
+  room.tickSeq = (room.tickSeq + 1) & 0xFF;
+  const now = Date.now();
+
+  // Construir entradas de jugadores
+  const entries = [];
+  for (const [pid, pdata] of room.players) {
+    const isStale = (now - pdata.lastUpdate > 2000) ? 0x02 : 0x00;
+    const pflags = 0x01 | isStale; // bit0=CONNECTED, bit1=STALE
+
+    const entry = Buffer.alloc(10);
+    entry[0] = pid;
+    entry[1] = pflags;
+    if (pdata.state) {
+      pdata.state.copy(entry, 2, 0, 8);
+    }
+    entries.push(entry);
+  }
+
+  // Payload: [FLAGS, N_PLAYERS, TICK_SEQ, ...entries]
+  const payloadSize = 3 + entries.length * 10;
+  const payload = Buffer.alloc(payloadSize);
+  payload[0] = 0x00;             // FLAGS (sin turnos por ahora)
+  payload[1] = entries.length;   // N_PLAYERS
+  payload[2] = room.tickSeq;     // TICK_SEQ
+
+  let off = 3;
+  for (const entry of entries) {
+    entry.copy(payload, off);
+    off += 10;
+  }
+
+  // Enviar a cada jugador (header PID = el PID del receptor)
+  for (const [pid, pdata] of room.players) {
+    if (!pdata.socket.destroyed) {
+      pdata.socket.write(buildPacket(CMD.WORLD_STATE, roomId, pid, payload));
+    }
+  }
+}
+
+function startRoomTick(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || room.mode !== ROOM_MODE_AGGREGATE) return;
+  if (room.tickInterval) return; // Ya corriendo
+  room.tickInterval = setInterval(() => {
+    broadcastWorldState(roomId);
+  }, room.tickMs);
+  console.log(`Sala ${roomId}: tick iniciado (${room.tickMs}ms)`);
+}
+
+function stopRoomTick(roomId) {
+  const room = rooms.get(roomId);
+  if (!room || !room.tickInterval) return;
+  clearInterval(room.tickInterval);
+  room.tickInterval = null;
+  console.log(`Sala ${roomId}: tick detenido`);
 }
 
 // ── Parser de paquetes (buffer acumulativo) ────────────────────
@@ -132,6 +212,7 @@ function leaveRoom(socket, state) {
   console.log(`[${socket.remoteAddress}] Abandona sala ${state.roomId} (P${state.pid})`);
 
   if (room.players.size === 0) {
+    stopRoomTick(state.roomId);
     console.log(`Sala ${state.roomId} vacia (persiste)`);
   } else {
     broadcastToRoom(room, null,
@@ -177,19 +258,22 @@ function handlePacket(socket, state, { cmd, payload }) {
         break;
       }
       const maxPlayers = Math.min(payload[1] ?? 4, MAX_PLAYERS_LIMIT);
+      // Byte 2: protocol version (0x01=relay, 0x02=aggregated)
+      const protoVer = payload[2] ?? 0x01;
+      const mode = (protoVer >= 0x02) ? ROOM_MODE_AGGREGATE : ROOM_MODE_RELAY;
       // Auto-leave si ya estaba en una sala
       if (state.roomId) leaveRoom(socket, state);
-      const roomId = createRoom(gameId, maxPlayers);
+      const roomId = createRoom(gameId, maxPlayers, mode);
       if (roomId === null) {
         socket.write(buildPacket(CMD.ERROR, 0, 0, Buffer.from([0x02])));
         break;
       }
       const room   = rooms.get(roomId);
       const pid    = 1; // El creador siempre es P1 (host)
-      room.players.set(pid, socket);
+      room.players.set(pid, { socket, state: null, lastUpdate: Date.now() });
       state.roomId = roomId;
       state.pid    = pid;
-      console.log(`[${socket.remoteAddress}] Crea sala ${roomId} (game=0x${gameId.toString(16)}, max=${maxPlayers})`);
+      console.log(`[${socket.remoteAddress}] Crea sala ${roomId} (game=0x${gameId.toString(16)}, max=${maxPlayers}, mode=${mode ? 'AGGREGATE' : 'RELAY'})`);
       socket.write(buildPacket(
         CMD.ROOM_INFO, roomId, pid,
         Buffer.from([roomId, gameId, 1, pid])
@@ -205,7 +289,7 @@ function handlePacket(socket, state, { cmd, payload }) {
       if (!pid) { socket.write(buildPacket(CMD.ROOM_FULL)); break; }
       // Auto-leave si ya estaba en una sala
       if (state.roomId) leaveRoom(socket, state);
-      room.players.set(pid, socket);
+      room.players.set(pid, { socket, state: null, lastUpdate: Date.now() });
       state.roomId = roomId;
       state.pid    = pid;
       console.log(`[${socket.remoteAddress}] Entra sala ${roomId} como P${pid}`);
@@ -241,20 +325,35 @@ function handlePacket(socket, state, { cmd, payload }) {
       break;
 
     case CMD.STATE_UPDATE: {
-      // El corazón del servidor: relay del paquete completo a los demás
       const room = rooms.get(state.roomId);
       if (!room) break;
-      const relay = buildPacket(CMD.STATE_UPDATE, state.roomId, state.pid, payload);
-      broadcastToRoom(room, state.pid, relay);
+
+      if (room.mode === ROOM_MODE_AGGREGATE) {
+        // Almacenar estado del jugador — el tick lo enviará agregado
+        const pdata = room.players.get(state.pid);
+        if (pdata) {
+          pdata.state = Buffer.from(payload.slice(0, 8));
+          pdata.lastUpdate = Date.now();
+        }
+      } else {
+        // Relay puro (legacy)
+        const relay = buildPacket(CMD.STATE_UPDATE, state.roomId, state.pid, payload);
+        broadcastToRoom(room, state.pid, relay);
+      }
       break;
     }
 
     case CMD.GAME_START: {
       const room = rooms.get(state.roomId);
       if (!room || state.pid !== 1) break; // Solo P1 (host) puede arrancar
+      room.gameStarted = true;
       broadcastToRoom(room, state.pid,
         buildPacket(CMD.GAME_START, state.roomId, 0)
       );
+      // Iniciar tick en modo agregado
+      if (room.mode === ROOM_MODE_AGGREGATE) {
+        startRoomTick(state.roomId);
+      }
       break;
     }
 
@@ -323,7 +422,8 @@ rl.on('line', (line) => {
       console.log(`${rooms.size} sala(s):`);
       for (const [id, room] of rooms) {
         const pids = [...room.players.keys()].join(', ');
-        console.log(`  Sala ${id} (0x${id.toString(16).padStart(2,'0')}) | juego=${room.gameId} | jugadores=${room.players.size}/${room.maxPlayers} [${pids}]`);
+        const modeStr = room.mode === ROOM_MODE_AGGREGATE ? 'AGG' : 'RLY';
+        console.log(`  Sala ${id} (0x${id.toString(16).padStart(2,'0')}) | juego=${room.gameId} | ${modeStr} | jugadores=${room.players.size}/${room.maxPlayers} [${pids}]`);
       }
     }
   } else if (cmd === 'connections' || cmd === 'c') {
@@ -343,7 +443,9 @@ rl.on('line', (line) => {
   } else if (cmd === 'clearall') {
     // Borrar TODAS las salas (desconecta jugadores)
     for (const [id, room] of rooms) {
-      for (const [pid, sock] of room.players) {
+      stopRoomTick(id);
+      for (const [pid, pdata] of room.players) {
+        const sock = pdata.socket || pdata;
         if (!sock.destroyed) sock.destroy();
       }
     }
