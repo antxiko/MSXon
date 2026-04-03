@@ -695,7 +695,7 @@ void Net_CreateRoom(void)
     g_SendBuf[4] = 0;
     g_SendBuf[5] = 3;
     g_SendBuf[6] = GAME_ID_CRAWLER;
-    g_SendBuf[7] = 4;
+    g_SendBuf[7] = 14;  // max 14 jugadores
     g_SendBuf[8] = PROTO_VERSION_AGGREGATE;
     Net_Send(g_Conn, g_SendBuf, 9);
     Log_Write("[ROOM] CREATE enviado");
@@ -869,7 +869,7 @@ void Entities_DrawSprites(void)
     u8 i;
     u8 sprIdx = 1; // Sprite 0 = jugador local
 
-    for(i = 1; i <= MAX_ENTITIES && sprIdx < 8; i++)
+    for(i = 1; i <= MAX_ENTITIES && sprIdx < 15; i++)
     {
         if(g_Entities[i].active && i != g_MyPid)
         {
@@ -889,7 +889,7 @@ void Entities_DrawSprites(void)
     }
 
     // Ocultar sprites no usados
-    for(; sprIdx < 8; sprIdx++)
+    for(; sprIdx < 15; sprIdx++)
         VDP_SetSpriteExUniColor(sprIdx, 0, 209, 0, 0);
 }
 

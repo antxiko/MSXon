@@ -290,7 +290,7 @@ async function startGhostPlayer() {
 
         if (ghosts.length === 0) {
             // Primer ghost: crear sala Burdyn AGGREGATE
-            const infoPkt = await ghostSendAndWait(sock, CMD.ROOM_CREATE, Buffer.from([0x03, 4, 0x02]), CMD.ROOM_INFO);
+            const infoPkt = await ghostSendAndWait(sock, CMD.ROOM_CREATE, Buffer.from([0x03, 14, 0x02]), CMD.ROOM_INFO);
             roomId = infoPkt.payload[0];
             pid = infoPkt.payload[3];
             console.log(`\nGhost ${ghosts.length + 1}: sala creada 0x${roomId.toString(16).padStart(2, '0')} | PID=${pid}`);
@@ -327,8 +327,9 @@ async function startGhostPlayer() {
             }
         }, 250);
 
-        ghosts.push({ socket: sock, interval, roomId, pid });
-        console.log(`${ghosts.length} ghost(s) activo(s). Escribe "stop" para parar todos.\n`);
+        ghosts.push({ socket: sock, interval, roomId, pid, x, y });
+        console.log(`  Ghost #${ghosts.length} | PID=${pid} | Sala=0x${roomId.toString(16).padStart(2,'0')} | Pos=(${x},${y}) | dx=${dx} dy=${dy}`);
+        console.log(`  Total: ${ghosts.length} ghost(s). "stop" para parar todos.\n`);
 
     } catch (err) {
         console.log(`Error: ${err.message}`);
