@@ -21,3 +21,4 @@ node_modules/
 
 # Claude Code
 .claude/
+tools/msxonline-cli/target/
