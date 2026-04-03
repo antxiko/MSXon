@@ -349,6 +349,222 @@ function stopGhostPlayer() {
     ghosts.length = 0;
 }
 
+// ── Ghost Damas (IA basica) ──────────────────────────────────
+
+let damasGhost = null; // { socket, interval, board, roomId, pid, myColor }
+
+const PIECE_NONE = 0, PIECE_WHITE = 1, PIECE_BLACK = 2, PIECE_WHITE_KING = 3, PIECE_BLACK_KING = 4;
+const isWhite = p => p === PIECE_WHITE || p === PIECE_WHITE_KING;
+const isBlack = p => p === PIECE_BLACK || p === PIECE_BLACK_KING;
+const isKing = p => p === PIECE_WHITE_KING || p === PIECE_BLACK_KING;
+const isEnemy = (a, b) => (isWhite(a) && isBlack(b)) || (isBlack(a) && isWhite(b));
+
+function damasInitBoard() {
+    const b = Array.from({length: 8}, () => new Array(8).fill(0));
+    for (let y = 0; y < 8; y++) {
+        for (let x = 0; x < 8; x++) {
+            if ((x + y) & 1) {
+                if (y < 3) b[y][x] = PIECE_BLACK;
+                else if (y > 4) b[y][x] = PIECE_WHITE;
+            }
+        }
+    }
+    return b;
+}
+
+function damasFindMoves(board, color) {
+    const captures = [];
+    const moves = [];
+
+    for (let y = 0; y < 8; y++) {
+        for (let x = 0; x < 8; x++) {
+            const p = board[y][x];
+            if (p === PIECE_NONE) continue;
+            const mine = (color === PIECE_WHITE) ? isWhite(p) : isBlack(p);
+            if (!mine) continue;
+
+            if (isKing(p)) {
+                // Dama: 4 diagonales, cualquier distancia
+                for (const sy of [-1, 1]) {
+                    for (const sx of [-1, 1]) {
+                        let foundEnemy = false;
+                        let ex = 0, ey = 0;
+                        for (let i = 1; i < 8; i++) {
+                            const cx = x + sx * i, cy = y + sy * i;
+                            if (cx < 0 || cx >= 8 || cy < 0 || cy >= 8) break;
+                            const cp = board[cy][cx];
+                            if (cp === PIECE_NONE) {
+                                if (foundEnemy) captures.push({fx: x, fy: y, tx: cx, ty: cy});
+                                else moves.push({fx: x, fy: y, tx: cx, ty: cy});
+                            } else if (isEnemy(p, cp) && !foundEnemy) {
+                                foundEnemy = true; ex = cx; ey = cy;
+                            } else break;
+                        }
+                    }
+                }
+            } else {
+                // Ficha normal
+                const fwd = (color === PIECE_WHITE) ? -1 : 1;
+                // Movimientos simples
+                for (const dx of [-1, 1]) {
+                    const tx = x + dx, ty = y + fwd;
+                    if (tx >= 0 && tx < 8 && ty >= 0 && ty < 8 && board[ty][tx] === PIECE_NONE)
+                        moves.push({fx: x, fy: y, tx, ty});
+                }
+                // Capturas (4 direcciones)
+                for (const dy of [-1, 1]) {
+                    for (const dx of [-1, 1]) {
+                        const mx = x + dx, my = y + dy;
+                        const tx = x + dx * 2, ty = y + dy * 2;
+                        if (tx >= 0 && tx < 8 && ty >= 0 && ty < 8 &&
+                            board[ty][tx] === PIECE_NONE && isEnemy(p, board[my][mx]))
+                            captures.push({fx: x, fy: y, tx, ty});
+                    }
+                }
+            }
+        }
+    }
+    // Capturas son obligatorias
+    return captures.length > 0 ? captures : moves;
+}
+
+function damasExecuteMove(board, fx, fy, tx, ty) {
+    const p = board[fy][fx];
+    board[ty][tx] = p;
+    board[fy][fx] = PIECE_NONE;
+
+    const dx = tx - fx, dy = ty - fy;
+    const sx = dx > 0 ? 1 : -1, sy = dy > 0 ? 1 : -1;
+    const dist = Math.abs(dx);
+
+    // Quitar pieza capturada
+    for (let i = 1; i < dist; i++) {
+        const cx = fx + sx * i, cy = fy + sy * i;
+        if (board[cy][cx] !== PIECE_NONE) {
+            board[cy][cx] = PIECE_NONE;
+            break;
+        }
+    }
+
+    // Promocion
+    if (p === PIECE_WHITE && ty === 0) board[ty][tx] = PIECE_WHITE_KING;
+    if (p === PIECE_BLACK && ty === 7) board[ty][tx] = PIECE_BLACK_KING;
+}
+
+async function startDamasGhost() {
+    if (damasGhost) {
+        console.log('\nGhost de damas ya activo. Escribe "stopd" para pararlo.\n');
+        return;
+    }
+
+    try {
+        const { sock } = await createGhostConnection();
+
+        // Buscar sala de damas o crear una
+        const listPkt = await ghostSendAndWait(sock, CMD.ROOM_LIST, null, CMD.ROOM_LIST);
+        const count = listPkt.payload.length > 0 ? listPkt.payload[0] : 0;
+
+        let roomId, pid;
+        let damasSala = null;
+
+        // Buscar sala de damas con sitio
+        for (let i = 0; i < count; i++) {
+            const off = 1 + i * 3;
+            if (listPkt.payload[off + 1] === 0x02 && listPkt.payload[off + 2] < 2) {
+                damasSala = listPkt.payload[off];
+                break;
+            }
+        }
+
+        if (damasSala) {
+            const joinPkt = await ghostSendAndWait(sock, CMD.ROOM_JOIN, Buffer.from([damasSala]), CMD.ROOM_INFO);
+            roomId = joinPkt.payload[0];
+            pid = joinPkt.payload[3];
+            console.log(`\nGhost damas: unido a sala 0x${roomId.toString(16).padStart(2, '0')} como P${pid}`);
+        } else {
+            const infoPkt = await ghostSendAndWait(sock, CMD.ROOM_CREATE, Buffer.from([0x02, 2, 0x01]), CMD.ROOM_INFO);
+            roomId = infoPkt.payload[0];
+            pid = infoPkt.payload[3];
+            console.log(`\nGhost damas: sala creada 0x${roomId.toString(16).padStart(2, '0')} como P${pid}`);
+        }
+
+        const myColor = (pid === 1) ? PIECE_WHITE : PIECE_BLACK;
+        const board = damasInitBoard();
+        let turn = PIECE_WHITE;
+        let moveCount = 0;
+
+        console.log(`Ghost juega con ${myColor === PIECE_WHITE ? 'BLANCAS' : 'NEGRAS'}. "stopd" para parar.\n`);
+
+        // Escuchar movimientos del oponente
+        let recvBuf = Buffer.alloc(0);
+        sock.on('data', (chunk) => {
+            recvBuf = Buffer.concat([recvBuf, chunk]);
+            while (recvBuf.length >= 6) {
+                if (recvBuf[0] !== 0x46 || recvBuf[1] !== 0x4D) { recvBuf = recvBuf.subarray(1); continue; }
+                const len = recvBuf[5];
+                if (recvBuf.length < 6 + len) break;
+                const cmd = recvBuf[2];
+                const payload = recvBuf.subarray(6, 6 + len);
+                recvBuf = recvBuf.subarray(6 + len);
+
+                if (cmd === 0x40 && len >= 4) {
+                    // Movimiento del oponente
+                    const fx = payload[0], fy = payload[1], tx = payload[2], ty = payload[3];
+                    damasExecuteMove(board, fx, fy, tx, ty);
+                    turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
+                    console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'}`);
+                }
+                if (cmd === 0x30) {
+                    // PLAYER_JOINED — el oponente llego
+                    console.log('  Oponente conectado!');
+                }
+            }
+        });
+
+        // Hacer jugadas periodicamente
+        const interval = setInterval(() => {
+            if (turn !== myColor) return; // No es mi turno
+
+            const validMoves = damasFindMoves(board, myColor);
+            if (validMoves.length === 0) {
+                console.log('  Ghost sin movimientos — partida terminada');
+                clearInterval(interval);
+                return;
+            }
+
+            // Elegir movimiento: priorizar capturas, sino aleatorio
+            const move = validMoves[Math.floor(Math.random() * validMoves.length)];
+            damasExecuteMove(board, move.fx, move.fy, move.tx, move.ty);
+
+            // Enviar movimiento
+            const payload = Buffer.from([move.fx, move.fy, move.tx, move.ty, turn, 0, 0, 0]);
+            if (!sock.destroyed) {
+                sock.write(buildPacket(0x40, roomId, pid, payload));
+            }
+            moveCount++;
+            turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
+            console.log(`  Ghost: (${move.fx},${move.fy})->(${move.tx},${move.ty}) | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'} | Jugada #${moveCount}`);
+
+        }, 2000); // Juega cada 2 segundos
+
+        damasGhost = { socket: sock, interval, board, roomId, pid, myColor };
+
+    } catch (err) {
+        console.log(`Error: ${err.message}`);
+    }
+}
+
+function stopDamasGhost() {
+    if (!damasGhost) {
+        console.log('\nNo hay ghost de damas activo.\n');
+        return;
+    }
+    clearInterval(damasGhost.interval);
+    if (!damasGhost.socket.destroyed) damasGhost.socket.destroy();
+    damasGhost = null;
+    console.log('\nGhost de damas detenido.\n');
+}
+
 async function pingServer() {
     try {
         await connect();
@@ -373,8 +589,10 @@ function showMenu() {
     console.log('  3. Crear sala de prueba');
     console.log('  4. Ping al servidor');
     console.log('  5. Reconectar');
-    console.log('  6. Jugador fantasma (rebota por pantalla)');
-    console.log('  7. Parar jugador fantasma');
+    console.log('  6. Ghost Burdyn (rebota por mapa)');
+    console.log('  7. Parar ghosts Burdyn');
+    console.log('  8. Ghost Damas (IA basica)');
+    console.log('  9. Parar ghost Damas');
     console.log('  0. Salir');
     console.log('═══════════════════════════════════════');
 }
@@ -407,6 +625,12 @@ async function main() {
                     break;
                 case '7': case 'stop':
                     stopGhostPlayer();
+                    break;
+                case '8': case 'damas':
+                    await startDamasGhost();
+                    break;
+                case '9': case 'stopd':
+                    stopDamasGhost();
                     break;
                 case '0': case 'q': case 'quit': case 'exit':
                     disconnect();

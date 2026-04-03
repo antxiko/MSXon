@@ -216,6 +216,8 @@ const u8 g_CursorSprite[32] = {
 #define PIECE_NONE      0
 #define PIECE_WHITE     1
 #define PIECE_BLACK     2
+#define PIECE_WHITE_KING 3
+#define PIECE_BLACK_KING 4
 
 static u8 g_Board[BOARD_SIZE][BOARD_SIZE];
 
@@ -323,6 +325,12 @@ void Buf_PutTile(u8 col, u8 row, u8 tile)
 // TABLERO: INICIALIZAR
 //=============================================================================
 
+// Helpers de piezas
+bool IsWhite(u8 p) { return (p == PIECE_WHITE || p == PIECE_WHITE_KING); }
+bool IsBlack(u8 p) { return (p == PIECE_BLACK || p == PIECE_BLACK_KING); }
+bool IsKing(u8 p) { return (p == PIECE_WHITE_KING || p == PIECE_BLACK_KING); }
+bool IsEnemy(u8 a, u8 b) { return (IsWhite(a) && IsBlack(b)) || (IsBlack(a) && IsWhite(b)); }
+
 // Forward declarations
 void Net_SendMove(u8 fromX, u8 fromY, u8 toX, u8 toY);
 void Lobby_Draw(void);
@@ -408,7 +416,12 @@ void Pieces_Draw(void)
             {
                 u8 px = (BOARD_TX + bx * 2) * 8;
                 u8 py = (BOARD_TY + by * 2) * 8;
-                u8 color = (piece == PIECE_WHITE) ? 15 : 1;
+                u8 color;
+                // Normal: blanco=15, negro=1. Dama: blanco=11(amarillo), negro=8(rojo)
+                if(piece == PIECE_WHITE) color = 15;
+                else if(piece == PIECE_BLACK) color = 1;
+                else if(piece == PIECE_WHITE_KING) color = 11;
+                else color = 8; // PIECE_BLACK_KING
                 VDP_SetSpriteExUniColor(sprIdx, px, py, 0, color);
                 sprIdx++;
             }
@@ -462,32 +475,70 @@ void VDP_LoadTileset(void)
 bool Move_IsValid(u8 fromX, u8 fromY, u8 toX, u8 toY)
 {
     u8 piece;
-    i8 dx, dy;
+    i8 dx, dy, sx, sy, dist, i;
 
     piece = g_Board[fromY][fromX];
     if(piece == PIECE_NONE) return FALSE;
     if(g_Board[toY][toX] != PIECE_NONE) return FALSE;
     if(toX >= BOARD_SIZE || toY >= BOARD_SIZE) return FALSE;
-    if(!((toX + toY) & 1)) return FALSE; // Solo casillas oscuras
+    if(!((toX + toY) & 1)) return FALSE;
 
     dx = (i8)toX - (i8)fromX;
     dy = (i8)toY - (i8)fromY;
 
-    // Movimiento simple: 1 diagonal
-    if(piece == PIECE_WHITE && dy == -1 && (dx == 1 || dx == -1))
-        return TRUE;
-    if(piece == PIECE_BLACK && dy == 1 && (dx == 1 || dx == -1))
-        return TRUE;
+    // Debe ser diagonal
+    if(dx == 0 || dy == 0) return FALSE;
+    if(dx < 0) { sx = -1; dist = -dx; } else { sx = 1; dist = dx; }
+    if(dy < 0) sy = -1; else sy = 1;
+    if(dist != (dy < 0 ? -dy : dy)) return FALSE; // No es diagonal perfecta
 
-    // Captura: 2 diagonales, pieza enemiga en medio
-    if((dx == 2 || dx == -2) && (dy == 2 || dy == -2))
+    if(IsKing(piece))
     {
-        u8 midX = fromX + dx / 2;
-        u8 midY = fromY + dy / 2;
-        u8 midPiece = g_Board[midY][midX];
+        // Dama: puede moverse cualquier distancia en diagonal
+        // Contar piezas enemigas en el camino (max 1 para captura)
+        u8 enemies = 0;
+        u8 enemyX = 0, enemyY = 0;
 
-        if(piece == PIECE_WHITE && midPiece == PIECE_BLACK) return TRUE;
-        if(piece == PIECE_BLACK && midPiece == PIECE_WHITE) return TRUE;
+        for(i = 1; i < dist; i++)
+        {
+            u8 cx = fromX + sx * i;
+            u8 cy = fromY + sy * i;
+            u8 cp = g_Board[cy][cx];
+            if(cp != PIECE_NONE)
+            {
+                if(IsEnemy(piece, cp))
+                {
+                    enemies++;
+                    enemyX = cx;
+                    enemyY = cy;
+                    if(enemies > 1) return FALSE; // Mas de 1 pieza en el camino
+                }
+                else
+                {
+                    return FALSE; // Pieza propia en el camino
+                }
+            }
+        }
+        // Movimiento libre o captura de 1 enemiga
+        return TRUE;
+    }
+    else
+    {
+        // Ficha normal: solo 1 casilla adelante
+        if(dist == 1)
+        {
+            // Blancas avanzan hacia arriba (dy=-1), negras hacia abajo (dy=1)
+            if(piece == PIECE_WHITE && dy == -1) return TRUE;
+            if(piece == PIECE_BLACK && dy == 1) return TRUE;
+        }
+        // Captura: 2 casillas en diagonal, pieza enemiga en medio
+        if(dist == 2)
+        {
+            u8 midX = fromX + sx;
+            u8 midY = fromY + sy;
+            u8 midPiece = g_Board[midY][midX];
+            if(IsEnemy(piece, midPiece)) return TRUE;
+        }
     }
 
     return FALSE;
@@ -496,23 +547,55 @@ bool Move_IsValid(u8 fromX, u8 fromY, u8 toX, u8 toY)
 bool CanCapture(u8 x, u8 y)
 {
     u8 piece = g_Board[y][x];
-    u8 enemy = (piece == PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
-    i8 dx, dy;
+    i8 sx, sy, i;
 
-    for(dy = -2; dy <= 2; dy += 4)
+    if(IsKing(piece))
     {
-        for(dx = -2; dx <= 2; dx += 4)
+        // Dama: buscar capturas en las 4 diagonales a cualquier distancia
+        for(sy = -1; sy <= 1; sy += 2)
         {
-            u8 toX = x + dx;
-            u8 toY = y + dy;
-            u8 midX = x + dx / 2;
-            u8 midY = y + dy / 2;
-
-            if(toX >= BOARD_SIZE || toY >= BOARD_SIZE) continue;
-            if(g_Board[toY][toX] != PIECE_NONE) continue;
-            if(g_Board[midY][midX] != enemy) continue;
-            if(!((toX + toY) & 1)) continue;
-            return TRUE;
+            for(sx = -1; sx <= 1; sx += 2)
+            {
+                u8 foundEnemy = 0;
+                for(i = 1; i < BOARD_SIZE; i++)
+                {
+                    u8 cx = x + sx * i;
+                    u8 cy = y + sy * i;
+                    u8 cp;
+                    if(cx >= BOARD_SIZE || cy >= BOARD_SIZE) break;
+                    cp = g_Board[cy][cx];
+                    if(cp == PIECE_NONE)
+                    {
+                        if(foundEnemy) return TRUE; // Casilla libre tras enemiga
+                        continue;
+                    }
+                    if(IsEnemy(piece, cp) && !foundEnemy)
+                    {
+                        foundEnemy = 1;
+                        continue;
+                    }
+                    break; // Pieza propia o segunda enemiga
+                }
+            }
+        }
+    }
+    else
+    {
+        // Ficha normal: solo captura a 2 casillas
+        i8 dx, dy;
+        for(dy = -2; dy <= 2; dy += 4)
+        {
+            for(dx = -2; dx <= 2; dx += 4)
+            {
+                u8 toX = x + dx;
+                u8 toY = y + dy;
+                u8 midX = x + dx / 2;
+                u8 midY = y + dy / 2;
+                if(toX >= BOARD_SIZE || toY >= BOARD_SIZE) continue;
+                if(g_Board[toY][toX] != PIECE_NONE) continue;
+                if(!IsEnemy(piece, g_Board[midY][midX])) continue;
+                return TRUE;
+            }
         }
     }
     return FALSE;
@@ -520,23 +603,38 @@ bool CanCapture(u8 x, u8 y)
 
 void Move_Execute(u8 fromX, u8 fromY, u8 toX, u8 toY)
 {
-    i8 dx, dy;
+    i8 dx, dy, sx, sy, dist, i;
     u8 wasCapture = 0;
+    u8 piece;
 
-    g_Board[toY][toX] = g_Board[fromY][fromX];
+    piece = g_Board[fromY][fromX];
+    g_Board[toY][toX] = piece;
     g_Board[fromY][fromX] = PIECE_NONE;
 
     dx = (i8)toX - (i8)fromX;
     dy = (i8)toY - (i8)fromY;
+    sx = (dx > 0) ? 1 : -1;
+    sy = (dy > 0) ? 1 : -1;
+    dist = (dx > 0) ? dx : -dx;
 
-    // Captura: quitar pieza del medio
-    if(dx == 2 || dx == -2)
+    // Buscar y quitar pieza capturada en el camino
+    for(i = 1; i < dist; i++)
     {
-        u8 midX = fromX + dx / 2;
-        u8 midY = fromY + dy / 2;
-        g_Board[midY][midX] = PIECE_NONE;
-        wasCapture = 1;
+        u8 cx = fromX + sx * i;
+        u8 cy = fromY + sy * i;
+        if(g_Board[cy][cx] != PIECE_NONE)
+        {
+            g_Board[cy][cx] = PIECE_NONE;
+            wasCapture = 1;
+            break;
+        }
     }
+
+    // Promocion: ficha llega al extremo opuesto
+    if(piece == PIECE_WHITE && toY == 0)
+        g_Board[toY][toX] = PIECE_WHITE_KING;
+    if(piece == PIECE_BLACK && toY == BOARD_SIZE - 1)
+        g_Board[toY][toX] = PIECE_BLACK_KING;
 
     // Si fue captura, comprobar si puede seguir capturando
     if(wasCapture && CanCapture(toX, toY))
@@ -614,12 +712,16 @@ void Game_ProcessInput(void)
                 // En modo online, solo puedo mover mis fichas y en mi turno
                 if(g_MyColor != 0)
                 {
-                    if(piece != g_MyColor || g_Turn != g_MyColor) return;
+                    // Online: solo mis fichas en mi turno
+                    if(g_MyColor == PIECE_WHITE && !IsWhite(piece)) return;
+                    if(g_MyColor == PIECE_BLACK && !IsBlack(piece)) return;
+                    if(g_Turn != g_MyColor) return;
                 }
                 else
                 {
-                    // Offline: solo mover del turno actual
-                    if(piece != g_Turn) return;
+                    // Offline: solo fichas del turno actual
+                    if(g_Turn == PIECE_WHITE && !IsWhite(piece)) return;
+                    if(g_Turn == PIECE_BLACK && !IsBlack(piece)) return;
                 }
 
                 g_Selected = 1;
