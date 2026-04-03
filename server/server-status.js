@@ -32,6 +32,7 @@ const CMD = {
 const GAME_NAMES = {
     0x01: 'Prueba (sprites)',
     0x02: 'Damas',
+    0x03: 'Burdyn',
 };
 
 let socket = null;
@@ -211,7 +212,9 @@ async function createTestRoom(rl) {
         const maxPlayers = parseInt(maxChoice, 10) || 4;
 
         await connect();
-        const pkt = await sendAndWait(CMD.ROOM_CREATE, Buffer.from([gameId, Math.min(maxPlayers, 16)]), CMD.ROOM_INFO);
+        // gameId 0x03 (Burdyn) usa AGGREGATE mode (proto version 0x02)
+        const protoVer = (gameId === 0x03) ? 0x02 : 0x01;
+        const pkt = await sendAndWait(CMD.ROOM_CREATE, Buffer.from([gameId, Math.min(maxPlayers, 16), protoVer]), CMD.ROOM_INFO);
         const roomId  = pkt.payload[0];
         const gId     = pkt.payload[1];
         const players = pkt.payload[2];
@@ -241,11 +244,14 @@ async function startGhostPlayer() {
         const count = listPkt.payload.length > 0 ? listPkt.payload[0] : 0;
 
         if (count === 0) {
-            // Crear sala nueva
-            const infoPkt = await sendAndWait(CMD.ROOM_CREATE, Buffer.from([0x01]), CMD.ROOM_INFO);
+            // Crear sala nueva (Burdyn AGGREGATE)
+            const infoPkt = await sendAndWait(CMD.ROOM_CREATE, Buffer.from([0x03, 4, 0x02]), CMD.ROOM_INFO);
             ghostRoomId = infoPkt.payload[0];
             ghostPid = infoPkt.payload[3];
-            console.log(`\nSala creada: 0x${ghostRoomId.toString(16).padStart(2, '0')} | PID=${ghostPid}`);
+            console.log(`\nSala creada: 0x${ghostRoomId.toString(16).padStart(2, '0')} | PID=${ghostPid} (Burdyn AGGREGATE)`);
+            // Enviar GAME_START para arrancar tick
+            socket.write(buildPacket(0x32, ghostRoomId, ghostPid));
+            console.log('GAME_START enviado');
         } else {
             // Unirse a la primera sala
             const roomId = listPkt.payload[1];
@@ -255,37 +261,67 @@ async function startGhostPlayer() {
             console.log(`\nUnido a sala 0x${ghostRoomId.toString(16).padStart(2, '0')} | PID=${ghostPid}`);
         }
 
-        // Posicion inicial y movimiento
-        let x = 128;
-        let y = 106;
-        let dx = 2;
-        let dy = 1;
+        // Detectar tipo de juego por gameId de la sala
+        let roomGameId = 0x01;
+        if (count > 0) {
+            // Buscar gameId de la sala a la que nos unimos
+            for (let i = 0; i < count; i++) {
+                if (listPkt.payload[1 + i * 3] === ghostRoomId) {
+                    roomGameId = listPkt.payload[2 + i * 3];
+                    break;
+                }
+            }
+        }
+        const isBurdyn = (roomGameId === 0x03);
+
+        // Posicion inicial
+        let x = isBurdyn ? 10 : 128;
+        let y = isBurdyn ? 10 : 106;
+        let dx = isBurdyn ? 1 : 2;
+        let dy = isBurdyn ? 1 : 1;
         let frame = 0;
 
-        console.log('Jugador fantasma activo. Escribe "stop" para parar.\n');
+        console.log(`Jugador fantasma activo (${isBurdyn ? 'Burdyn 0-63' : 'Ball 0-255'}). Escribe "stop" para parar.\n`);
 
         ghostInterval = setInterval(() => {
-            // Mover rebotando — limites pantalla 256x192 (con margen sprite 16px)
             x += dx;
             y += dy;
-            if (x <= 0 || x >= 240) dx = -dx;  // 256 - 16
-            if (y <= 33 || y >= 196) dy = -dy;  // HUD_HEIGHT=33, 212-16
-            if (x < 0) x = 0;
-            if (x > 240) x = 240;
-            if (y < 33) y = 33;
-            if (y > 196) y = 196;
+
+            if (isBurdyn) {
+                // Burdyn: mapa 64x64 tiles, evitar bordes (muros)
+                if (x <= 1 || x >= 62) dx = -dx;
+                if (y <= 1 || y >= 62) dy = -dy;
+                if (x < 1) x = 1;
+                if (x > 62) x = 62;
+                if (y < 1) y = 1;
+                if (y > 62) y = 62;
+            } else {
+                // Ball Demo: pantalla 256x192 pixeles
+                if (x <= 0 || x >= 240) dx = -dx;
+                if (y <= 33 || y >= 196) dy = -dy;
+                if (x < 0) x = 0;
+                if (x > 240) x = 240;
+                if (y < 33) y = 33;
+                if (y > 196) y = 196;
+            }
             frame = (frame + 1) & 0xFF;
 
-            // STATE_UPDATE payload: [X_HI, X_LO, Y_HI, Y_LO, FRAME, FLAGS, DATA_0, DATA_1]
-            const payload = Buffer.from([
-                (x >> 8) & 0xFF, x & 0xFF,
-                (y >> 8) & 0xFF, y & 0xFF,
-                frame, 0, 0, 0
-            ]);
+            let payload;
+            if (isBurdyn) {
+                // Burdyn: [X, Y, DIR, HP, ITEM, CLASS, LEVEL, FLAGS]
+                payload = Buffer.from([x, y, 0, 100, 0, 0, 1, 0]);
+            } else {
+                // Ball Demo: [X_HI, X_LO, Y_HI, Y_LO, FRAME, FLAGS, 0, 0]
+                payload = Buffer.from([
+                    (x >> 8) & 0xFF, x & 0xFF,
+                    (y >> 8) & 0xFF, y & 0xFF,
+                    frame, 0, 0, 0
+                ]);
+            }
             if (socket && !socket.destroyed) {
                 socket.write(buildPacket(CMD.STATE_UPDATE, ghostRoomId, ghostPid, payload));
             }
-        }, 100);  // 10 FPS
+        }, isBurdyn ? 250 : 100);  // Burdyn 4 FPS (tiles), Ball 10 FPS
 
     } catch (err) {
         console.log(`Error: ${err.message}`);

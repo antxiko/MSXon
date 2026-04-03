@@ -17,9 +17,9 @@ El servidor solo gestiona salas y reenvia paquetes. Anadir un nuevo juego = camb
 
 ## EMPRESA
 
-- **FX-Media Audio Video, S.L.** — empresa espanola de doblaje y postproduccion audiovisual
-- Proyecto hobby/experimento de retro-computing
-- Mantienen noSignal BBS (Mystic BBS, orientado a MSX/C64/Spectrum/Amstrad/Atari)
+- **Antxiko** — desarrollador retro-computing
+- Proyecto hobby/experimento de juegos online para MSX
+- Mantiene noSignal BBS (Mystic BBS, orientado a MSX/C64/Spectrum/Amstrad/Atari)
 
 ---
 
@@ -455,4 +455,4 @@ static const u8 SERVER_IP[4] = { 217, 154, 107, 144 }; // IP del VPS
 
 ---
 
-_Proyecto de FX-Media Audio Video, S.L. · MSX Online Game Server v1.0_
+_Proyecto de Antxiko · MSX Online Game Server v2.0_

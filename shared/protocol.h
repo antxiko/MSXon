@@ -9,7 +9,7 @@
 #ifndef PROTOCOL_H
 #define PROTOCOL_H
 
-// ── Magic bytes (FM = header marker) ──────────────────────────
+// ── Magic bytes (FM = FX-Media) ───────────────────────────────
 #define PROTO_MAGIC_0       0x46    // 'F'
 #define PROTO_MAGIC_1       0x4D    // 'M'
 #define PROTO_HEADER_SZ     6

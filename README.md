@@ -272,4 +272,4 @@ MIT
 
 ---
 
-*Proyecto de [FX-Media Audio Video, S.L.](https://fx-media.es) — noSignal BBS*
+*Proyecto de Antxiko — noSignal BBS*

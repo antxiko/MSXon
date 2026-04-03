@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<title>Burdyn — Editor de Mapas</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #eee; font-family: monospace; display: flex; height: 100vh; }
+
+#sidebar {
+    width: 220px; padding: 10px; background: #16213e;
+    display: flex; flex-direction: column; gap: 8px;
+    overflow-y: auto;
+}
+#sidebar h2 { color: #e94560; font-size: 14px; }
+#sidebar button {
+    padding: 6px; background: #0f3460; color: #eee; border: 1px solid #e94560;
+    cursor: pointer; font-family: monospace; font-size: 12px;
+}
+#sidebar button:hover { background: #e94560; }
+
+.tile-btn {
+    display: inline-block; width: 40px; height: 40px; margin: 2px;
+    border: 2px solid transparent; cursor: pointer; image-rendering: pixelated;
+}
+.tile-btn.selected { border-color: #e94560; }
+.tile-info { font-size: 11px; color: #aaa; }
+
+#main { flex: 1; display: flex; flex-direction: column; }
+#toolbar { padding: 8px; background: #0f3460; display: flex; gap: 8px; align-items: center; font-size: 12px; }
+#toolbar label { color: #aaa; }
+#canvas-wrap { flex: 1; overflow: auto; padding: 10px; }
+canvas { image-rendering: pixelated; cursor: crosshair; }
+#status { padding: 4px 10px; background: #16213e; font-size: 11px; color: #aaa; }
+
+textarea { width: 100%; height: 120px; background: #0a0a1a; color: #0f0; border: 1px solid #333;
+    font-family: monospace; font-size: 10px; resize: vertical; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h2>BURDYN MAP EDITOR</h2>
+    <div>
+        <label class="tile-info">Tile seleccionado:</label>
+        <div id="tile-palette"></div>
+    </div>
+    <div>
+        <label class="tile-info">Herramienta:</label><br>
+        <button id="btn-pen" onclick="setTool('pen')" style="background:#e94560">Lapiz</button>
+        <button id="btn-fill" onclick="setTool('fill')">Relleno</button>
+        <button id="btn-rect" onclick="setTool('rect')">Rect</button>
+    </div>
+    <div>
+        <label class="tile-info">Brocha:</label>
+        <input type="range" id="brush-size" min="1" max="3" value="1" oninput="setBrush(this.value)">
+        <span id="brush-val">1x1</span>
+    </div>
+    <div>
+        <label class="tile-info">Grid:</label>
+        <button onclick="toggleGrid()">On/Off</button>
+        <button onclick="toggleScreenGrid()">Pantallas</button>
+    </div>
+    <hr style="border-color:#333">
+    <div>
+        <button onclick="clearMap()">Limpiar mapa</button>
+        <button onclick="randomMap()">Mapa aleatorio</button>
+    </div>
+    <hr style="border-color:#333">
+    <div>
+        <button onclick="exportC()">Exportar C array</button>
+        <button onclick="exportBin()">Exportar .BIN</button>
+        <button onclick="importC()">Importar C array</button>
+    </div>
+    <textarea id="output" placeholder="Exportar/importar aqui..."></textarea>
+    <div>
+        <label class="tile-info">Cargar .BIN:</label>
+        <input type="file" id="fileInput" accept=".bin" onchange="importBin(event)">
+    </div>
+</div>
+
+<div id="main">
+    <div id="toolbar">
+        <label>Zoom:</label>
+        <input type="range" id="zoom" min="4" max="16" value="8" oninput="setZoom(this.value)">
+        <span id="zoom-val">8x</span>
+        <label>|</label>
+        <label>Mapa: 64×64</label>
+        <label>| Viewport: 32×22</label>
+    </div>
+    <div id="canvas-wrap">
+        <canvas id="map-canvas"></canvas>
+    </div>
+    <div id="status">Listo. Click para pintar, Shift+Click para seleccionar tile del mapa.</div>
+</div>
+
+<script>
+const MAP_W = 64, MAP_H = 64;
+const VIEW_W = 32, VIEW_H = 22;
+const TILE_SIZE = 8; // pixeles por tile en el canvas base
+
+const TILES = [
+    // Terreno (0-7)
+    { name: 'Suelo',     color: '#2a2a2a', pattern: 'dot' },
+    { name: 'Muro',      color: '#8B4513', pattern: 'brick' },
+    { name: 'Hierba',    color: '#006400', pattern: 'grass' },
+    { name: 'Agua',      color: '#000080', pattern: 'wave' },
+    { name: 'Puerta',    color: '#8B6914', pattern: 'door' },
+    { name: 'Escaleras', color: '#808080', pattern: 'stairs' },
+    { name: 'Arbol',     color: '#004000', pattern: 'tree' },
+    { name: 'Cofre',     color: '#DAA520', pattern: 'chest' },
+    // Items (8-39)
+    { name: 'Daga',       color: '#C0C0C0', pattern: 'item' },
+    { name: 'Espada',     color: '#FFFFFF', pattern: 'item' },
+    { name: 'Hacha',      color: '#A0A0A0', pattern: 'item' },
+    { name: 'Maza',       color: '#909090', pattern: 'item' },
+    { name: 'Arco',       color: '#8B6914', pattern: 'item' },
+    { name: 'Baston',     color: '#9B59B6', pattern: 'item' },
+    { name: 'Esc.Madera', color: '#8B6914', pattern: 'item' },
+    { name: 'Esc.Hierro', color: '#5DADE2', pattern: 'item' },
+    { name: 'Casco Lig.', color: '#A0784C', pattern: 'item' },
+    { name: 'Casco Pes.', color: '#A0A0A0', pattern: 'item' },
+    { name: 'Arm. Lig.',  color: '#A0784C', pattern: 'item' },
+    { name: 'Arm. Pes.',  color: '#5DADE2', pattern: 'item' },
+    { name: 'Botas',      color: '#6B4226', pattern: 'item' },
+    { name: 'Capa',       color: '#9B59B6', pattern: 'item' },
+    { name: 'Anillo',     color: '#F1C40F', pattern: 'item' },
+    { name: 'Amuleto',    color: '#F1C40F', pattern: 'item' },
+    { name: 'Poc. HP',    color: '#E74C3C', pattern: 'item' },
+    { name: 'Poc. MP',    color: '#3498DB', pattern: 'item' },
+    { name: 'Poc. Vel.',  color: '#2ECC71', pattern: 'item' },
+    { name: 'Pan',        color: '#D4A054', pattern: 'item' },
+    { name: 'Carne',      color: '#C0392B', pattern: 'item' },
+    { name: 'Manzana',    color: '#E74C3C', pattern: 'item' },
+    { name: 'Llave Oro',  color: '#F1C40F', pattern: 'item' },
+    { name: 'Llave Plat.',color: '#BDC3C7', pattern: 'item' },
+    { name: 'Moneda Oro', color: '#F1C40F', pattern: 'item' },
+    { name: 'Gema Roja',  color: '#E74C3C', pattern: 'item' },
+    { name: 'Gema Azul',  color: '#3498DB', pattern: 'item' },
+    { name: 'Pergamino',  color: '#ECF0F1', pattern: 'item' },
+    { name: 'Bomba',      color: '#2C3E50', pattern: 'item' },
+    { name: 'Antorcha',   color: '#E67E22', pattern: 'item' },
+    { name: 'Cuerda',     color: '#A0784C', pattern: 'item' },
+    { name: 'Mapa',       color: '#F5DEB3', pattern: 'item' },
+];
+
+let map = new Uint8Array(MAP_W * MAP_H);
+let selectedTile = 1;
+let tool = 'pen';
+let zoom = 8;
+let brushSize = 1; // 1=1x1, 2=2x2, 3=4x4
+const BRUSH_SIZES = [1, 2, 4];
+let showGrid = true;
+let showScreenGrid = true;
+let painting = false;
+let rectStart = null;
+
+const canvas = document.getElementById('map-canvas');
+const ctx = canvas.getContext('2d');
+
+// Generar paleta de tiles
+function buildPalette() {
+    const pal = document.getElementById('tile-palette');
+    pal.innerHTML = '';
+    TILES.forEach((t, i) => {
+        const c = document.createElement('canvas');
+        c.width = 32; c.height = 32;
+        c.className = 'tile-btn' + (i === selectedTile ? ' selected' : '');
+        c.title = `${i}: ${t.name}`;
+        c.onclick = () => { selectedTile = i; buildPalette(); };
+        const cx = c.getContext('2d');
+        drawTile(cx, 0, 0, i, 32);
+        pal.appendChild(c);
+        const lbl = document.createElement('span');
+        lbl.className = 'tile-info';
+        lbl.textContent = t.name;
+        if (i === selectedTile) lbl.style.color = '#e94560';
+        pal.appendChild(lbl);
+        pal.appendChild(document.createElement('br'));
+    });
+}
+
+function drawTile(cx, x, y, tileId, size) {
+    const t = TILES[tileId] || TILES[0];
+    cx.fillStyle = t.color;
+    cx.fillRect(x, y, size, size);
+
+    const s = size / 8;
+    cx.fillStyle = 'rgba(255,255,255,0.15)';
+
+    if (t.pattern === 'brick') {
+        for (let r = 0; r < 8; r += 2) {
+            cx.fillRect(x, y + r * s, size, s * 0.3);
+        }
+        cx.fillStyle = 'rgba(0,0,0,0.3)';
+        for (let r = 1; r < 8; r += 4) {
+            cx.fillRect(x + 4 * s, y + r * s, s * 0.5, s * 2);
+        }
+    } else if (t.pattern === 'dot') {
+        cx.fillRect(x + 5 * s, y + 2 * s, s, s);
+        cx.fillRect(x + 2 * s, y + 5 * s, s, s);
+    } else if (t.pattern === 'grass') {
+        for (let i = 0; i < 6; i++) {
+            const gx = ((i * 7 + 3) % 8);
+            const gy = ((i * 5 + 1) % 8);
+            cx.fillRect(x + gx * s, y + gy * s, s, s * 2);
+        }
+    } else if (t.pattern === 'wave') {
+        cx.fillStyle = 'rgba(100,150,255,0.3)';
+        for (let r = 2; r < 8; r += 4) {
+            for (let c = 0; c < 8; c++) {
+                const off = Math.sin(c * 0.8 + r) > 0 ? 0 : s;
+                cx.fillRect(x + c * s, y + r * s + off, s, s);
+            }
+        }
+    } else if (t.pattern === 'door') {
+        cx.fillStyle = 'rgba(255,200,100,0.4)';
+        cx.fillRect(x + 2 * s, y + s, 4 * s, 6 * s);
+        cx.fillStyle = 'rgba(0,0,0,0.5)';
+        cx.fillRect(x + 3 * s, y + 4 * s, s, s);
+    } else if (t.pattern === 'stairs') {
+        for (let r = 0; r < 8; r += 2) {
+            cx.fillStyle = r % 4 === 0 ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.3)';
+            cx.fillRect(x, y + r * s, size, s);
+        }
+    } else if (t.pattern === 'tree') {
+        cx.fillStyle = '#005500';
+        cx.fillRect(x + s, y, 6 * s, 5 * s);
+        cx.fillStyle = '#4a2800';
+        cx.fillRect(x + 3 * s, y + 5 * s, 2 * s, 3 * s);
+    } else if (t.pattern === 'chest') {
+        cx.fillStyle = '#B8860B';
+        cx.fillRect(x + s, y + 2 * s, 6 * s, 4 * s);
+        cx.fillStyle = '#FFD700';
+        cx.fillRect(x + s, y + 4 * s, 6 * s, s);
+    } else if (t.pattern === 'item') {
+        // Item: fondo suelo + icono centrado del color del item
+        cx.fillStyle = '#2a2a2a';
+        cx.fillRect(x, y, size, size);
+        cx.fillStyle = t.color;
+        cx.fillRect(x + 2 * s, y + 2 * s, 4 * s, 4 * s);
+        cx.fillStyle = 'rgba(255,255,255,0.3)';
+        cx.fillRect(x + 2 * s, y + 2 * s, 4 * s, s);
+    }
+}
+
+function render() {
+    const w = MAP_W * zoom;
+    const h = MAP_H * zoom;
+    canvas.width = w;
+    canvas.height = h;
+
+    // Tiles
+    for (let y = 0; y < MAP_H; y++) {
+        for (let x = 0; x < MAP_W; x++) {
+            drawTile(ctx, x * zoom, y * zoom, map[y * MAP_W + x], zoom);
+        }
+    }
+
+    // Grid
+    if (showGrid && zoom >= 6) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+        ctx.lineWidth = 0.5;
+        for (let x = 0; x <= MAP_W; x++) {
+            ctx.beginPath(); ctx.moveTo(x * zoom, 0); ctx.lineTo(x * zoom, h); ctx.stroke();
+        }
+        for (let y = 0; y <= MAP_H; y++) {
+            ctx.beginPath(); ctx.moveTo(0, y * zoom); ctx.lineTo(w, y * zoom); ctx.stroke();
+        }
+    }
+
+    // Screen grid (32×22 viewports)
+    if (showScreenGrid) {
+        ctx.strokeStyle = 'rgba(229,69,96,0.6)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 3]);
+        for (let x = 0; x <= MAP_W; x += VIEW_W) {
+            ctx.beginPath(); ctx.moveTo(x * zoom, 0); ctx.lineTo(x * zoom, h); ctx.stroke();
+        }
+        for (let y = 0; y <= MAP_H; y += VIEW_H) {
+            ctx.beginPath(); ctx.moveTo(0, y * zoom); ctx.lineTo(w, y * zoom); ctx.stroke();
+        }
+        ctx.setLineDash([]);
+    }
+}
+
+// Herramientas
+function getTileAt(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / zoom);
+    const y = Math.floor((e.clientY - rect.top) / zoom);
+    return { x: Math.max(0, Math.min(MAP_W - 1, x)), y: Math.max(0, Math.min(MAP_H - 1, y)) };
+}
+
+function setTile1(x, y, t) {
+    if (x >= 0 && x < MAP_W && y >= 0 && y < MAP_H) {
+        map[y * MAP_W + x] = t;
+    }
+}
+
+function setTile(x, y, t) {
+    const sz = BRUSH_SIZES[brushSize - 1];
+    for (let dy = 0; dy < sz; dy++) {
+        for (let dx = 0; dx < sz; dx++) {
+            setTile1(x + dx, y + dy, t);
+        }
+    }
+}
+
+function setBrush(v) {
+    brushSize = parseInt(v);
+    const sz = BRUSH_SIZES[brushSize - 1];
+    document.getElementById('brush-val').textContent = sz + 'x' + sz;
+}
+
+function floodFill(sx, sy, newTile) {
+    const oldTile = map[sy * MAP_W + sx];
+    if (oldTile === newTile) return;
+    const stack = [[sx, sy]];
+    while (stack.length > 0) {
+        const [x, y] = stack.pop();
+        if (x < 0 || x >= MAP_W || y < 0 || y >= MAP_H) continue;
+        if (map[y * MAP_W + x] !== oldTile) continue;
+        map[y * MAP_W + x] = newTile;
+        stack.push([x-1, y], [x+1, y], [x, y-1], [x, y+1]);
+    }
+}
+
+function fillRect(x1, y1, x2, y2, t) {
+    const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+    const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+    for (let y = minY; y <= maxY; y++)
+        for (let x = minX; x <= maxX; x++)
+            setTile(x, y, t);
+}
+
+canvas.addEventListener('mousedown', (e) => {
+    const { x, y } = getTileAt(e);
+    if (e.shiftKey) {
+        selectedTile = map[y * MAP_W + x];
+        buildPalette();
+        status(`Tile seleccionado: ${selectedTile} (${TILES[selectedTile]?.name})`);
+        return;
+    }
+    painting = true;
+    if (tool === 'pen') { setTile(x, y, selectedTile); render(); }
+    else if (tool === 'fill') { floodFill(x, y, selectedTile); render(); }
+    else if (tool === 'rect') { rectStart = { x, y }; }
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    const { x, y } = getTileAt(e);
+    status(`X:${x} Y:${y} | Tile: ${map[y * MAP_W + x]} (${TILES[map[y * MAP_W + x]]?.name}) | Screen: ${Math.floor(x / VIEW_W)},${Math.floor(y / VIEW_H)}`);
+    if (painting && tool === 'pen') { setTile(x, y, selectedTile); render(); }
+});
+
+canvas.addEventListener('mouseup', (e) => {
+    if (painting && tool === 'rect' && rectStart) {
+        const { x, y } = getTileAt(e);
+        fillRect(rectStart.x, rectStart.y, x, y, selectedTile);
+        rectStart = null;
+        render();
+    }
+    painting = false;
+});
+
+canvas.addEventListener('mouseleave', () => { painting = false; });
+
+// UI
+function setTool(t) {
+    tool = t;
+    document.getElementById('btn-pen').style.background = t === 'pen' ? '#e94560' : '#0f3460';
+    document.getElementById('btn-fill').style.background = t === 'fill' ? '#e94560' : '#0f3460';
+    document.getElementById('btn-rect').style.background = t === 'rect' ? '#e94560' : '#0f3460';
+}
+
+function setZoom(v) {
+    zoom = parseInt(v);
+    document.getElementById('zoom-val').textContent = zoom + 'x';
+    render();
+}
+
+function toggleGrid() { showGrid = !showGrid; render(); }
+function toggleScreenGrid() { showScreenGrid = !showScreenGrid; render(); }
+function status(msg) { document.getElementById('status').textContent = msg; }
+
+function clearMap() {
+    map.fill(0);
+    render();
+    status('Mapa limpiado');
+}
+
+function randomMap() {
+    for (let y = 0; y < MAP_H; y++) {
+        for (let x = 0; x < MAP_W; x++) {
+            const idx = y * MAP_W + x;
+            if (x === 0 || y === 0 || x === MAP_W - 1 || y === MAP_H - 1) {
+                map[idx] = 1;
+            } else if ((x & 7) === 0 && (y & 3) !== 0) {
+                map[idx] = 1;
+            } else if ((y & 7) === 0 && (x & 3) !== 0) {
+                map[idx] = 1;
+            } else if (x >= 28 && x <= 35 && y >= 28 && y <= 35) {
+                map[idx] = 3;
+            } else if (((x * 7 + y * 13) & 0x3F) === 0) {
+                map[idx] = 6;
+            } else if (((x + y) & 3) === 0) {
+                map[idx] = 2;
+            } else {
+                map[idx] = 0;
+            }
+        }
+    }
+    render();
+    status('Mapa aleatorio generado (misma semilla que burdyn.c)');
+}
+
+// Export/Import
+function exportC() {
+    let s = '// Mapa Burdyn 64x64 — generado por editor\n';
+    s += 'const u8 g_MapData[4096] = {\n';
+    for (let y = 0; y < MAP_H; y++) {
+        s += '    ';
+        for (let x = 0; x < MAP_W; x++) {
+            s += '0x' + map[y * MAP_W + x].toString(16).padStart(2, '0');
+            if (y < MAP_H - 1 || x < MAP_W - 1) s += ',';
+        }
+        s += ' // row ' + y + '\n';
+    }
+    s += '};\n';
+    document.getElementById('output').value = s;
+    status('Exportado como C array (4096 bytes)');
+}
+
+function exportBin() {
+    const blob = new Blob([map], { type: 'application/octet-stream' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'burdyn_map.bin';
+    a.click();
+    status('Exportado como burdyn_map.bin');
+}
+
+function importC() {
+    const text = document.getElementById('output').value;
+    const matches = text.match(/0x[0-9a-fA-F]{2}/g);
+    if (!matches || matches.length < MAP_W * MAP_H) {
+        status('Error: no se encontraron suficientes bytes hex');
+        return;
+    }
+    for (let i = 0; i < MAP_W * MAP_H; i++) {
+        map[i] = parseInt(matches[i], 16);
+    }
+    render();
+    status('Importado C array (' + matches.length + ' bytes)');
+}
+
+function importBin(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const data = new Uint8Array(e.target.result);
+        const len = Math.min(data.length, MAP_W * MAP_H);
+        for (let i = 0; i < len; i++) map[i] = data[i];
+        render();
+        status('Importado ' + file.name + ' (' + len + ' bytes)');
+    };
+    reader.readAsArrayBuffer(file);
+}
+
+// Init
+buildPalette();
+randomMap();
+</script>
+</body>
+</html>

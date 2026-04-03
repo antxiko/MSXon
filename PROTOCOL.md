@@ -256,4 +256,4 @@ sock.on('data', (chunk) => {
 
 ---
 
-_MSX Online Game Server v2.0 — FX-Media Audio Video, S.L._
+_MSX Online Game Server v2.0 — Antxiko_
