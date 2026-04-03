@@ -1250,7 +1250,7 @@ void Player_UpdateSprite(void)
     u8 py = (g_PlayerY - g_ScrollY) * 8;
 
     // Centrar sprite 16×16 en tile 8×8: offset -4
-    VDP_SetSpriteExUniColor(SPR_PLAYER, px - 4, py - 4, 0, 15);
+    VDP_SetSpriteExUniColor(SPR_PLAYER, px - 4, py - 4, 0, g_EntityColors[g_MyPid > 0 ? g_MyPid : 1]);
 }
 
 //=============================================================================
@@ -1531,6 +1531,13 @@ void main(void)
     VDP_SetSpriteFlag(VDP_SPRITE_SIZE_16 | VDP_SPRITE_SCALE_1);
     VDP_LoadSpritePattern(g_PlayerSprite, 0, 4);
 
+    // Ocultar todos los sprites al inicio
+    {
+        u8 s;
+        for(s = 0; s < 32; s++)
+            VDP_SetSpriteExUniColor(s, 0, 209, 0, 0);
+    }
+
     // Inicializar
     for(i = 0; i < INV_SLOTS; i++) g_Inventory[i] = 0;
     for(i = 0; i <= MAX_ENTITIES; i++) g_Entities[i].active = 0;
@@ -1586,13 +1593,29 @@ void main(void)
         // Vaciar buffer teclado BIOS (evitar acumulacion para DOS)
         *((u16*)0xF3F8) = *((u16*)0xF3FA);
 
-        // Capturar teclas en flags (se procesan en este mismo frame)
-        if(Keyboard_IsKeyPushed(KEY_UP))    g_KeyUp = 1;
-        if(Keyboard_IsKeyPushed(KEY_DOWN))  g_KeyDown = 1;
-        if(Keyboard_IsKeyPushed(KEY_RET))   g_KeyRet = 1;
-        if(Keyboard_IsKeyPushed(KEY_C))     g_KeyC = 1;
-        if(Keyboard_IsKeyPushed(KEY_R))     g_KeyR = 1;
-        if(Keyboard_IsKeyPushed(KEY_ESC))   g_KeyEsc = 1;
+        // Capturar teclas
+        if(g_GameState == STATE_LOBBY || g_GameState == STATE_LOBBY_WAIT)
+        {
+            // Lobby: anti-rebote para evitar repeticion
+            if(g_MoveDelay > 0)
+            {
+                g_MoveDelay--;
+            }
+            else
+            {
+                if(Keyboard_IsKeyPressed(KEY_UP))    { g_KeyUp = 1; g_MoveDelay = 8; }
+                if(Keyboard_IsKeyPressed(KEY_DOWN))  { g_KeyDown = 1; g_MoveDelay = 8; }
+                if(Keyboard_IsKeyPressed(KEY_RET))   { g_KeyRet = 1; g_MoveDelay = 15; }
+                if(Keyboard_IsKeyPressed(KEY_C))     { g_KeyC = 1; g_MoveDelay = 15; }
+                if(Keyboard_IsKeyPressed(KEY_R))     { g_KeyR = 1; g_MoveDelay = 15; }
+                if(Keyboard_IsKeyPressed(KEY_ESC))   { g_KeyEsc = 1; }
+            }
+        }
+        else
+        {
+            // Juego: sin anti-rebote, MOVE_RATE se aplica en Player_Move
+            if(Keyboard_IsKeyPressed(KEY_ESC))   g_KeyEsc = 1;
+        }
 
         // ESC = salir
         if(g_KeyEsc) break;
@@ -1605,7 +1628,8 @@ void main(void)
         else if(g_GameState == STATE_LOBBY)
         {
             Lobby_ProcessInput();
-            // Solo poll ligero: 1 paquete max (para ROOM_LIST response)
+            // Poll ligero: 1 paquete max (para ROOM_INFO response)
+            if(online)
             {
                 u16 avail = Net_Available(g_Conn);
                 if(avail >= 6)

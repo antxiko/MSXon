@@ -226,102 +226,109 @@ async function createTestRoom(rl) {
     }
 }
 
-let ghostInterval = null;
-let ghostRoomId = 0;
-let ghostPid = 0;
+const ghosts = []; // Array de { socket, interval, roomId, pid }
 
-async function startGhostPlayer() {
-    if (ghostInterval) {
-        console.log('\nJugador fantasma ya activo. Escribe "stop" para pararlo.\n');
-        return;
-    }
+function createGhostConnection() {
+    return new Promise((resolve, reject) => {
+        const sock = new net.Socket();
+        sock.setTimeout(10000);
+        sock.connect(SERVER_PORT, SERVER_IP, () => {
+            sock.write(buildPacket(CMD.AUTH, 0, 0, AUTH_TOKEN));
+        });
+        let buf = Buffer.alloc(0);
+        sock.on('data', (chunk) => {
+            buf = Buffer.concat([buf, chunk]);
+            while (buf.length >= 6) {
+                const idx = buf.indexOf(Buffer.from([0x46, 0x4D]));
+                if (idx < 0) { buf = Buffer.alloc(0); break; }
+                if (idx > 0) { buf = buf.subarray(idx); continue; }
+                const len = buf[5];
+                if (buf.length < 6 + len) break;
+                const cmd = buf[2];
+                const payload = buf.subarray(6, 6 + len);
+                buf = buf.subarray(6 + len);
+                if (cmd === 0x11) resolve({ sock, buf }); // AUTH_OK
+                if (cmd === 0x12) reject(new Error('Auth fail'));
+            }
+        });
+        sock.on('error', reject);
+        sock.on('timeout', () => { sock.destroy(); reject(new Error('Timeout')); });
+    });
+}
 
-    try {
-        await connect();
-
-        // Listar salas para elegir
-        const listPkt = await sendAndWait(CMD.ROOM_LIST, null, CMD.ROOM_LIST);
-        const count = listPkt.payload.length > 0 ? listPkt.payload[0] : 0;
-
-        if (count === 0) {
-            // Crear sala nueva (Burdyn AGGREGATE)
-            const infoPkt = await sendAndWait(CMD.ROOM_CREATE, Buffer.from([0x03, 4, 0x02]), CMD.ROOM_INFO);
-            ghostRoomId = infoPkt.payload[0];
-            ghostPid = infoPkt.payload[3];
-            console.log(`\nSala creada: 0x${ghostRoomId.toString(16).padStart(2, '0')} | PID=${ghostPid} (Burdyn AGGREGATE)`);
-            // Enviar GAME_START para arrancar tick
-            socket.write(buildPacket(0x32, ghostRoomId, ghostPid));
-            console.log('GAME_START enviado');
-        } else {
-            // Unirse a la primera sala
-            const roomId = listPkt.payload[1];
-            const joinPkt = await sendAndWait(CMD.ROOM_JOIN, Buffer.from([roomId]), CMD.ROOM_INFO);
-            ghostRoomId = joinPkt.payload[0];
-            ghostPid = joinPkt.payload[3];
-            console.log(`\nUnido a sala 0x${ghostRoomId.toString(16).padStart(2, '0')} | PID=${ghostPid}`);
-        }
-
-        // Detectar tipo de juego por gameId de la sala
-        let roomGameId = 0x01;
-        if (count > 0) {
-            // Buscar gameId de la sala a la que nos unimos
-            for (let i = 0; i < count; i++) {
-                if (listPkt.payload[1 + i * 3] === ghostRoomId) {
-                    roomGameId = listPkt.payload[2 + i * 3];
-                    break;
+function ghostSendAndWait(sock, cmd, payload, waitCmd) {
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Timeout')), 5000);
+        let buf = Buffer.alloc(0);
+        const handler = (chunk) => {
+            buf = Buffer.concat([buf, chunk]);
+            while (buf.length >= 6) {
+                if (buf[0] !== 0x46 || buf[1] !== 0x4D) { buf = buf.subarray(1); continue; }
+                const len = buf[5];
+                if (buf.length < 6 + len) break;
+                const c = buf[2];
+                const p = buf.subarray(6, 6 + len);
+                buf = buf.subarray(6 + len);
+                if (c === waitCmd) {
+                    clearTimeout(timer);
+                    sock.removeListener('data', handler);
+                    resolve({ cmd: c, payload: p });
+                    return;
                 }
             }
-        }
-        const isBurdyn = (roomGameId === 0x03);
+        };
+        sock.on('data', handler);
+        sock.write(buildPacket(cmd, 0, 0, payload));
+    });
+}
 
-        // Posicion inicial
-        let x = isBurdyn ? 10 : 128;
-        let y = isBurdyn ? 10 : 106;
-        let dx = isBurdyn ? 1 : 2;
-        let dy = isBurdyn ? 1 : 1;
+async function startGhostPlayer() {
+    try {
+        const { sock } = await createGhostConnection();
+
+        let roomId, pid;
+
+        if (ghosts.length === 0) {
+            // Primer ghost: crear sala Burdyn AGGREGATE
+            const infoPkt = await ghostSendAndWait(sock, CMD.ROOM_CREATE, Buffer.from([0x03, 4, 0x02]), CMD.ROOM_INFO);
+            roomId = infoPkt.payload[0];
+            pid = infoPkt.payload[3];
+            console.log(`\nGhost ${ghosts.length + 1}: sala creada 0x${roomId.toString(16).padStart(2, '0')} | PID=${pid}`);
+            sock.write(buildPacket(0x32, roomId, pid)); // GAME_START
+            console.log('GAME_START enviado');
+        } else {
+            // Siguientes ghosts: unirse a la sala del primer ghost
+            roomId = ghosts[0].roomId;
+            const joinPkt = await ghostSendAndWait(sock, CMD.ROOM_JOIN, Buffer.from([roomId]), CMD.ROOM_INFO);
+            roomId = joinPkt.payload[0];
+            pid = joinPkt.payload[3];
+            console.log(`\nGhost ${ghosts.length + 1}: unido a sala 0x${roomId.toString(16).padStart(2, '0')} | PID=${pid}`);
+        }
+
+        // Posicion y velocidad aleatoria
+        let x = 3 + ghosts.length * 5;
+        let y = 3 + ghosts.length * 4;
+        let dx = (ghosts.length % 2 === 0) ? 1 : -1;
+        let dy = (ghosts.length % 3 === 0) ? -1 : 1;
         let frame = 0;
 
-        console.log(`Jugador fantasma activo (${isBurdyn ? 'Burdyn 0-63' : 'Ball 0-255'}). Escribe "stop" para parar.\n`);
-
-        ghostInterval = setInterval(() => {
+        const interval = setInterval(() => {
             x += dx;
             y += dy;
-
-            if (isBurdyn) {
-                // Burdyn: mapa 64x64 tiles, evitar bordes (muros)
-                if (x <= 1 || x >= 62) dx = -dx;
-                if (y <= 1 || y >= 62) dy = -dy;
-                if (x < 1) x = 1;
-                if (x > 62) x = 62;
-                if (y < 1) y = 1;
-                if (y > 62) y = 62;
-            } else {
-                // Ball Demo: pantalla 256x192 pixeles
-                if (x <= 0 || x >= 240) dx = -dx;
-                if (y <= 33 || y >= 196) dy = -dy;
-                if (x < 0) x = 0;
-                if (x > 240) x = 240;
-                if (y < 33) y = 33;
-                if (y > 196) y = 196;
-            }
+            if (x <= 1 || x >= 62) dx = -dx;
+            if (y <= 1 || y >= 62) dy = -dy;
+            if (x < 1) x = 1; if (x > 62) x = 62;
+            if (y < 1) y = 1; if (y > 62) y = 62;
             frame = (frame + 1) & 0xFF;
 
-            let payload;
-            if (isBurdyn) {
-                // Burdyn: [X, Y, DIR, HP, ITEM, CLASS, LEVEL, FLAGS]
-                payload = Buffer.from([x, y, 0, 100, 0, 0, 1, 0]);
-            } else {
-                // Ball Demo: [X_HI, X_LO, Y_HI, Y_LO, FRAME, FLAGS, 0, 0]
-                payload = Buffer.from([
-                    (x >> 8) & 0xFF, x & 0xFF,
-                    (y >> 8) & 0xFF, y & 0xFF,
-                    frame, 0, 0, 0
-                ]);
+            const payload = Buffer.from([x, y, 0, 100, 0, 0, 1, 0]);
+            if (!sock.destroyed) {
+                sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, payload));
             }
-            if (socket && !socket.destroyed) {
-                socket.write(buildPacket(CMD.STATE_UPDATE, ghostRoomId, ghostPid, payload));
-            }
-        }, isBurdyn ? 250 : 100);  // Burdyn 4 FPS (tiles), Ball 10 FPS
+        }, 250);
+
+        ghosts.push({ socket: sock, interval, roomId, pid });
+        console.log(`${ghosts.length} ghost(s) activo(s). Escribe "stop" para parar todos.\n`);
 
     } catch (err) {
         console.log(`Error: ${err.message}`);
@@ -329,13 +336,16 @@ async function startGhostPlayer() {
 }
 
 function stopGhostPlayer() {
-    if (ghostInterval) {
-        clearInterval(ghostInterval);
-        ghostInterval = null;
-        console.log('\nJugador fantasma detenido.\n');
-    } else {
-        console.log('\nNo hay jugador fantasma activo.\n');
+    if (ghosts.length === 0) {
+        console.log('\nNo hay ghosts activos.\n');
+        return;
     }
+    for (const g of ghosts) {
+        clearInterval(g.interval);
+        if (!g.socket.destroyed) g.socket.destroy();
+    }
+    console.log(`\n${ghosts.length} ghost(s) detenido(s).\n`);
+    ghosts.length = 0;
 }
 
 async function pingServer() {
