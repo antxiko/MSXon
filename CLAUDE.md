@@ -1,458 +1,184 @@
 # MSX ONLINE — Contexto del proyecto para Claude
-# Ultima actualizacion: 2026-03-18
-# Estado: TCP conecta al VPS desde MSX real. Auth enviada, pendiente flush fix (MOL_020)
+# Ultima actualizacion: 2026-04-03
+# Estado: Ball Demo (MOL_038) y Burdyn RPG (BURD_012) funcionando en MSX real con multiplayer
 
 ---
 
 ## QUE ES ESTE PROYECTO
 
-Sistema de juego online para ordenadores MSX reales (Z80) con dos componentes:
+Plataforma de juegos online para MSX reales (Z80) con tres componentes:
 
-1. **Servidor Node.js** (`server/msx-gameserver.js`) — relay TCP puro, sin logica de juego
-2. **Cliente MSX** (`MSXgl/projects/msxonline/msxonlin.c`) — programa .COM para MSX2 + MSX-DOS 2
+1. **Servidor Node.js** (`server/msx-gameserver.js`) — gestiona salas, relay + aggregation
+2. **Ball Demo** (`client/`) — demo de sprites multijugador en Screen 5 (GAME_ID=0x01)
+3. **Burdyn** (`burdyn/`) — RPG crawler multijugador en Screen 4 (GAME_ID=0x03)
 
-El servidor solo gestiona salas y reenvia paquetes. Anadir un nuevo juego = cambiar el payload de STATE_UPDATE en el cliente. El servidor no cambia.
+Codigo compartido en `shared/`: network.h, protocol.h, log.h
 
 ---
 
-## EMPRESA
+## AUTOR
 
 - **Antxiko** — desarrollador retro-computing
-- Proyecto hobby/experimento de juegos online para MSX
 - Mantiene noSignal BBS (Mystic BBS, orientado a MSX/C64/Spectrum/Amstrad/Atari)
 
 ---
 
-## ESTRUCTURA DE ARCHIVOS (real, verificada)
+## ESTRUCTURA DE ARCHIVOS
 
 ```
-MSXonLIVE/
-|
-|-- CLAUDE.md                          <-- ESTE ARCHIVO
-|
-|-- msxonline.code-workspace          <-- Workspace VSCode (multi-carpeta)
+MSXonLINE/                           <-- Repo GitHub (antxiko/MSXonLINE)
 |
 |-- server/
-|   |-- msx-gameserver.js              <-- Servidor TCP Node.js (UNICO archivo de logica)
-|   |-- test-client.js                 <-- Cliente de prueba Node.js (simula MSX sin hardware)
-|   |-- deploy.sh                      <-- Script de despliegue inicial para VPS
-|   |-- update.sh                      <-- Script de actualizacion del VPS
-|   |-- package.json
-|   +-- msx-server.service             <-- Unidad systemd para VPS Ubuntu
+|   |-- msx-gameserver.js            <-- Servidor TCP (relay + aggregate)
+|   |-- server-status.js             <-- Monitor interactivo + ghost player
+|   |-- update.sh                    <-- Script de actualizacion VPS
+|   +-- msx-server.service           <-- Unidad systemd
 |
-|-- MSXgl/                             <-- Libreria MSXgl completa (submodulo/clone)
-|   |-- engine/
-|   |   |-- src/                       <-- Fuentes de la libreria
-|   |   |   |-- vdp.h, input.h, print.h, bios.h, system.h, core.h...
-|   |   |   |-- network/unapi_tcp.h    <-- API TCP/IP UNAPI
-|   |   |   +-- network/unapi_tcp.asm  <-- Implementacion ASM del wrapper UNAPI
-|   |   +-- content/font/              <-- Fuentes bitmap embebidas
-|   |       +-- font_mgl_sample6.h     <-- Fuente usada por el cliente (6px)
-|   |
-|   +-- projects/msxonline/            <-- ** DIRECTORIO DE TRABAJO DEL CLIENTE **
-|       |-- msxonlin.c                 <-- Codigo fuente principal (EDITAR ESTE)
-|       |-- msxonline.c                <-- Copia de respaldo (no la usa el build)
-|       |-- network.h                  <-- Capa de abstraccion UNAPI TCP
-|       |-- protocol.h                 <-- Protocolo binario (compartido con servidor)
-|       |-- msxgl_config.h             <-- Configuracion de modulos MSXgl
-|       |-- project_config.js          <-- Configuracion del build system MSXgl
-|       |-- build.sh                   <-- Script de compilacion
-|       |-- out/                       <-- Salida de compilacion
-|       |   |-- msxonlin.com           <-- Binario MSX-DOS 2 compilado
-|       |   |-- msxgl.lib              <-- Libreria precompilada
-|       |   |-- crt0_dos.rel           <-- Startup code MSX-DOS
-|       |   +-- unapi_tcp.rel          <-- Modulo TCP compilado
-|       +-- emul/
-|           |-- dos2/                  <-- Contenido del disco MSX-DOS 2
-|           |   |-- MSXDOS2.SYS, COMMAND2.COM, msxonlin.com, autoexec.bat
-|           +-- dsk/
-|               +-- DOS2_msxonlin.dsk  <-- Imagen de disco 720K lista para usar
+|-- shared/                          <-- Codigo compartido entre juegos
+|   |-- network.h                    <-- Capa UNAPI TCP
+|   |-- protocol.h                   <-- Protocolo binario
+|   +-- log.h                        <-- Logging a fichero MSX-DOS 2
 |
-|-- build/                             <-- Copia de resultados de compilacion
-|   |-- bin/                           <-- msxonlin.com + DOS2_msxonlin.dsk
-|   +-- dsk/                           <-- Contenido del disco suelto
+|-- client/                          <-- Ball Demo (GAME_ID=0x01, Screen 5)
+|   |-- msxonline.c                  <-- Fuente principal
+|   |-- network.h, protocol.h, log.h, msxgl_config.h
+|   +-- build: MOL_038
 |
-|-- client/                            <-- Copia de referencia (NO compilar aqui)
-|   |-- msxonline.c                    <-- Copia de msxonlin.c (solo referencia)
-|   |-- network.h, protocol.h, msxgl_config.h
-|   +-- Makefile                       <-- OBSOLETO — usar build.sh de MSXgl
+|-- burdyn/                          <-- RPG Crawler (GAME_ID=0x03, Screen 4)
+|   |-- burdyn.c                     <-- Fuente principal
+|   |-- editor.html                  <-- Editor de mapas HTML
+|   |-- assets/burdyn_map.bin        <-- Mapa 64x64
+|   |-- log.h, msxgl_config.h, project_config.js
+|   +-- build: BURD_012
 |
-+-- docs/
-    |-- MSX_GameServer_v1.0.pdf
-    +-- MSX_Client_Doc_v1.0.pdf
+|-- PROTOCOL.md                      <-- Especificacion del protocolo
+|-- COMMANDS.md                      <-- Referencia de comandos SSH/deploy
++-- README.md
 ```
 
-**IMPORTANTE**: El archivo fuente principal es `MSXgl/projects/msxonline/msxonlin.c` (8 chars, limite DOS). El build system de MSXgl (ProjName="msxonlin") busca ese nombre. `msxonline.c` en el mismo directorio es una copia de respaldo.
+El directorio de compilacion real es `MSXgl/projects/msxonline/` y `MSXgl/projects/burdyn/` (fuera del repo). Los fuentes se sincronizan al repo antes de push.
 
 ---
 
-## COMO COMPILAR
+## SERVIDOR (server/msx-gameserver.js)
 
-```bash
-cd MSXgl/projects/msxonline
-bash build.sh
-```
+### Dos modos de sala
 
-Esto genera:
-- `out/msxonlin.com` (~11KB)
-- `emul/dsk/DOS2_msxonlin.dsk` (720K con MSX-DOS 2 + autoexec.bat)
+- **RELAY** (legacy): recibe STATE_UPDATE, lo reenvía a los demas. Usado por Ball Demo.
+- **AGGREGATE**: almacena estados, envia WORLD_STATE (0x41) a todos a 10Hz. Usado por Burdyn.
 
-**NO usar el Makefile de client/**. El build system de MSXgl maneja crt0, linkado, conversion hex y empaquetado DSK correctamente.
+El modo se elige con PROTO_VERSION byte en ROOM_CREATE: 0x01=relay, 0x02=aggregate.
 
-### Requisitos de compilacion (macOS)
-
-- SDCC instalado en `/usr/local/bin/sdcc`
-- Node.js (para el build script de MSXgl)
-- MSXgl ya esta incluido en el repo
-
-### project_config.js — parametros clave
+### Configuracion
 
 ```javascript
-ProjName = "msxonlin";              // Nombre de salida (8 chars DOS)
-Target = "DOS2";                     // MSX-DOS 2 .COM
-Machine = "2";                       // MSX2
-LibModules = [ "system", "bios", "vdp", "print", "input", "memory" ];
-AddSources = [ "../../engine/src/network/unapi_tcp.asm" ];
-Compiler = "/usr/local/bin/sdcc";    // macOS — ajustar en otro SO
+PORT = 9876
+AUTH_TOKEN = DEADBEEF (configurable via MSX_AUTH_TOKEN env var)
+MAX_PLAYERS_LIMIT = 16
+TIMEOUT_MS = 90000
 ```
 
----
-
-## COMO PROBAR EN EMULADOR
+### VPS: 217.154.107.144
 
 ```bash
-openmsx -machine "Philips_NMS_8250" -ext msxdos2 -diska "MSXgl/projects/msxonline/emul/dsk/DOS2_msxonlin.dsk"
+# Logs
+ssh root@217.154.107.144 "journalctl -u msx-server -f"
+# Reiniciar
+ssh root@217.154.107.144 "systemctl restart msx-server"
+# Desplegar
+cd ~/Documents/MSXonLIVE/MSXonLINE && sed -i 's/\r$//' server/update.sh && scp server/msx-gameserver.js server/update.sh root@217.154.107.144:/tmp/ && ssh root@217.154.107.144 "bash /tmp/update.sh"
 ```
-
-- `-ext msxdos2` carga la ROM de MSX-DOS 2 (necesaria para arrancar DOS 2)
-- El autoexec.bat ejecuta `msxonlin` automaticamente
-- Sin ObsoNET/InterNestor mostrara "UNAPI no hallado" — ESC para salir a DOS
 
 ---
 
-## HARDWARE MSX TARGET
+## COMPILAR
 
-- **MSX2** (Z80 @ 3.58 MHz, VDP V9938)
-- **MSX-DOS 2** (necesario para mapper support)
-- **ObsoNET** (tarjeta Ethernet, BIOS >= 1.1 con UNAPI)
-- **InterNestor Lite 2.x** (stack TCP/IP, debe cargarse ANTES de ejecutar msxonlin.com)
-
----
-
-## SERVIDOR NODE.JS (server/msx-gameserver.js)
-
-Archivo unico, sin dependencias externas (solo `net` de Node.js).
-
-### Que hace
-
-- Escucha conexiones TCP en puerto 9876
-- Autentica clientes con token de 4 bytes
-- Gestiona salas de hasta 4 jugadores
-- Hace relay de paquetes STATE_UPDATE entre jugadores de la misma sala
-- Broadcast de eventos (PLAYER_JOINED, PLAYER_LEFT, GAME_START)
-- Lista de salas activas via CMD_ROOM_LIST (para el lobby)
-- Buffer acumulativo para manejar chunks TCP parciales (critico con ObsoNET)
-- ECONNRESET silenciado (muy comun con hardware MSX real)
-
-### Arquitectura
-
-- **Sin logica de juego** — el servidor es un relay puro. Solo reenvía STATE_UPDATE a los demas jugadores de la sala. Toda la logica de juego esta en el cliente MSX.
-- **Estado global**: `rooms` (Map de roomId -> { gameId, players: Map<pid, socket> })
-- **Estado por conexion**: `{ auth, roomId, pid, buffer }` (buffer acumulativo para parsing)
-- **Parser de paquetes**: `parsePackets()` — busca magic bytes, extrae header+payload, descarta basura
-- **Solo P1 (host)** puede enviar CMD_GAME_START
-
-### Configuracion (en msx-gameserver.js)
-
-```javascript
-const PORT               = 9876;
-const AUTH_TOKEN         = Buffer.from([0xDE, 0xAD, 0xBE, 0xEF]); // Cambiar en produccion
-const MAX_PLAYERS_PER_ROOM = 4;
-const TIMEOUT_MS         = 90_000;   // 90s — generoso para el Z80
-```
-
-### Despliegue en VPS Ubuntu
-
+### Ball Demo
 ```bash
-# Copiar archivos
-sudo mkdir -p /opt/msx-server
-sudo cp server/msx-gameserver.js /opt/msx-server/
-sudo cp server/msx-server.service /etc/systemd/system/
-
-# Activar servicio (se reinicia solo si cae)
-sudo systemctl daemon-reload
-sudo systemctl enable --now msx-server
-
-# Firewall
-sudo ufw allow 9876/tcp
+cd MSXgl/projects/msxonline && bash build.sh
 ```
 
-### Servicio systemd (msx-server.service)
-
-- Ejecuta como usuario `nobody`
-- WorkingDirectory: `/opt/msx-server`
-- Restart=always, RestartSec=5
-- MemoryMax=64M
-- Requiere Node.js >= 20 LTS
-
-### Desarrollo local
-
+### Burdyn
 ```bash
-cd server
-node --watch msx-gameserver.js    # Recarga automatica al editar
+cd MSXgl/projects/burdyn && bash build.sh
 ```
 
-### Cliente de prueba (server/test-client.js)
+Ambos generan .COM en `out/` y DSK en `emul/dsk/`. Copiar a `build/bin/` y `build/dsk/`.
 
-Simula un cliente MSX desde Node.js sin necesidad de hardware ni emulador.
-Envia AUTH, ROOM_CREATE, STATE_UPDATE. Util para depurar el servidor.
-
-```bash
-cd server
-node test-client.js
-```
-
-### Script de despliegue (server/deploy.sh)
-
-Automatiza la instalacion inicial en VPS Ubuntu: copia archivos, configura systemd, abre firewall.
-
-### Actualizacion del VPS (server/update.sh)
-
-Para actualizar el servidor en el VPS tras hacer cambios:
-
-```bash
-cd server && VPS=root@217.154.107.144 && scp msx-gameserver.js update.sh $VPS:/tmp/ && ssh $VPS 'bash /tmp/update.sh'
-```
-
-Copia el nuevo msx-gameserver.js y reinicia el servicio systemd.
-
-### Flujo de una conexion tipica
-
-1. Cliente conecta por TCP al puerto 9876
-2. Cliente envia CMD_AUTH con token de 4 bytes
-3. Servidor valida token -> CMD_AUTH_OK (o AUTH_FAIL + destroy)
-4. Cliente envia CMD_ROOM_LIST -> servidor responde con lista de salas activas
-5. Cliente muestra lobby: lista de salas con jugadores, opciones crear/unir
-6. Cliente envia CMD_ROOM_CREATE o CMD_ROOM_JOIN
-7. Servidor responde CMD_ROOM_INFO (o ROOM_FULL/ROOM_NOT_FOUND -> vuelve a lobby)
-8. Bucle de juego: clientes envian CMD_STATE_UPDATE, servidor relay a los demas
-9. CMD_PING cada ~5s para mantener viva la conexion (timeout servidor = 90s)
-10. Al salir: CMD_ROOM_LEAVE -> servidor broadcast CMD_PLAYER_LEFT y limpia sala
+### Requisitos
+- SDCC 4.5.0 (`C:\Program Files\SDCC` o `MSXgl/tools/sdcc/`)
+- Node.js (para build script MSXgl)
+- `ForceRamAddr = 0x8000` en project_config.js (CRITICO)
 
 ---
 
-## PROTOCOLO BINARIO
+## HARDWARE
 
-```
-[0x46][0x4D][CMD][ROOM][PID][LEN][...payload 0-255 bytes...]
-  'F'   'M'
-```
-
-### Comandos
-
-| CMD  | Nombre          | Direccion | Payload |
-|------|-----------------|-----------|---------|
-| 0x01 | PING            | Ambos     | - |
-| 0x02 | PONG            | SRV->MSX  | - |
-| 0x10 | AUTH            | MSX->SRV  | 4 bytes token |
-| 0x11 | AUTH_OK         | SRV->MSX  | - |
-| 0x12 | AUTH_FAIL       | SRV->MSX  | - |
-| 0x20 | ROOM_CREATE     | MSX->SRV  | 1 byte GAME_ID |
-| 0x21 | ROOM_JOIN       | MSX->SRV  | 1 byte ROOM_ID |
-| 0x22 | ROOM_LEAVE      | MSX->SRV  | - |
-| 0x23 | ROOM_INFO       | SRV->MSX  | [ROOM_ID, GAME_ID, N_PLAYERS, MY_PID] |
-| 0x26 | ROOM_LIST       | MSX->SRV  | - (peticion) |
-| 0x26 | ROOM_LIST       | SRV->MSX  | [N, ROOM_ID, GAME_ID, N_PLAYERS, ...] |
-| 0x30 | PLAYER_JOINED   | SRV->MSX  | 1 byte PID |
-| 0x31 | PLAYER_LEFT     | SRV->MSX  | 1 byte PID |
-| 0x40 | STATE_UPDATE    | Ambos     | 8 bytes (ver abajo) |
-
-### Payload STATE_UPDATE (8 bytes)
-
-```
-[X_HI][X_LO][Y_HI][Y_LO][FRAME][FLAGS][DATA_0][DATA_1]
-```
-
-### Token de autenticacion (cambiar en produccion)
-
-Cliente: `protocol.h` → `AUTH_TOKEN_0..3 = 0xDE, 0xAD, 0xBE, 0xEF`
-Servidor: `msx-gameserver.js` → `AUTH_TOKEN = Buffer.from([0xDE, 0xAD, 0xBE, 0xEF])`
+- MSX2 + MSX-DOS 2
+- ESP-01 WiFi modem con UNAPI driver (ducasp) — NO InterNestor Lite
+- Funciona tambien con GR8NET y ObsoNET
+- Offline si no hay UNAPI
 
 ---
 
-## MAQUINA DE ESTADOS DEL CLIENTE
+## PROBLEMAS RESUELTOS CRITICOS
 
-```
-STATE_INIT
-  -> STATE_CONNECTING    (Net_Init + Net_Open)
-  -> STATE_AUTH_WAIT     (enviado CMD_AUTH, esperando CMD_AUTH_OK)
-  -> STATE_LOBBY_WAIT    (enviado CMD_ROOM_LIST, esperando respuesta)
-  -> STATE_LOBBY         (lista de salas: cursores, C=crear, ENTER=unir, R=refrescar, J=ID manual)
-  -> STATE_JOIN_INPUT    (introduciendo Room ID por teclado, solo MSX)
-  -> STATE_CREATE_ROOM   (enviando CMD_ROOM_CREATE)
-  -> STATE_ROOM_WAIT     (esperando CMD_ROOM_INFO)
-  -> STATE_PLAYING       (bucle de juego activo)
-  -> STATE_EXIT          (ESC pulsado -> Game_Shutdown -> Bios_Exit(0))
+### ForceRamAddr = 0x8000
+Anadir codigo (incluso un string) desplaza DATA segment y rompe UNAPI. Fijar en 0x8000. Mover a 0xC000 si codigo > 32KB.
 
-ROOM_FULL / ROOM_NOT_FOUND -> vuelve al LOBBY (no a DISCONNECTED)
-En cualquier estado de error -> STATE_DISCONNECTED -> ESC -> STATE_EXIT
-```
+### __sdcccall(0) en UNAPI
+SDCC 4.5 usa sdcccall(1). unapi_tcp.asm necesita sdcccall(0). Poner `__sdcccall(0)` en CADA extern de unapi_tcp.h. NUNCA usar --sdcccall 0 global.
 
----
+### Auto-flush en Net_Send
+InterNestor/ESP-01 buferizan. Flush obligatorio tras cada tcp_send.
 
-## APIs MSXgl VERIFICADAS (NO asumir nombres — siempre grep en engine/src/)
+### g_ConnResult global
+El puntero `&conn` de tcpip_tcp_open debe ser global, no en stack.
 
-Estas son las funciones REALES de MSXgl usadas en el cliente. Se verificaron contra los headers reales y se probaron en emulador.
+### Dirty tile system (Burdyn)
+Buffer de 768 bytes en RAM + dirty index array (max 128). Si desborda, full flush. El scroll escribe directo al buffer sin dirty tracking y marca full flush.
 
-### VDP
-
-| Funcion                  | Uso en el cliente |
-|--------------------------|-------------------|
-| `VDP_SetMode(mode)`      | Cambiar Screen 0/5 |
-| `VDP_SetColor(color)`    | Color de borde (NO existe VDP_SetBorderColor) |
-| `VDP_FillVRAM(val, destLow, destHigh, count)` | Limpiar VRAM (128K) |
-| `VDP_SetSpriteFlag(flags)` | Configurar sprites 16x16 (NO es VDP_SetSprite) |
-| `VDP_LoadSpritePattern(data, index, count)` | Cargar patron sprite |
-| `VDP_SetSpriteSM1(i, x, y, shape, color)` | Posicionar sprite con color |
-| `VDP_CommandHMMV(dx, dy, nx, ny, col)` | Rellenar rectangulo VRAM |
-| `VDP_CommandLINE(dx, dy, nx, ny, col, arg, op)` | Dibujar linea |
-| `VDP_CommandWait()` | Esperar fin de comando VDP |
-| `Halt()` (system.h) | Esperar VBlank (NO existe VDP_WaitVBlank) |
-
-### Print
-
-| Funcion | Nota |
-|---------|------|
-| `Print_SetMode(PRINT_MODE_BITMAP)` | NO existe Print_SetFontType |
-| `Print_SetFont(g_Font_MGL_Sample6)` | NUNCA usar NULL — produce basura en bitmap mode |
-| `Print_SetColor(text, bg)` | |
-| `Print_SetPosition(x, y)` | |
-| `Print_DrawText(string)` | NO es Print_PrintText |
-| `Print_DrawChar(chr)` | NO es Print_PrintChar |
-| `Print_DrawHex8(value)` | NO es Print_PrintByte |
-
-### Input
-
-| Funcion | Nota |
-|---------|------|
-| `Keyboard_IsKeyPressed(KEY_ESC)` | |
-| `Joystick_Read(JOY_PORT_1)` | NO es JOY_1 |
-| `JOY_INPUT_DIR_UP/DOWN/LEFT/RIGHT` | NO es JOY_UP etc. |
-
-### BIOS
-
-| Funcion | Nota |
-|---------|------|
-| `Bios_Exit(0)` | Salida limpia a MSX-DOS (restaura Screen, llama BDOS) |
-
-### Tipos
-
-- `bool` (NO `bool8`) — definido en core.h como `unsigned char`
-- `u8`, `u16`, `c8` — tipos estandar MSXgl
+### Buffer teclado BIOS
+Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en flags inmediatamente tras Keyboard_Update.
 
 ---
 
-## ESTILO DE CODIGO
+## BALL DEMO (MOL_038)
 
-- C estilo K&R, 4 espacios (no tabs)
-- Tipos MSXgl: `u8`, `u16`, `bool` — NO usar `int`, `unsigned char`
-- Variables globales con prefijo `g_`
-- Constantes: `UPPER_CASE` con prefijo de modulo (`CMD_`, `NET_`, `STATE_FLAG_`)
-- Comentarios en espanol
-- Sin stdlib — solo MSXgl. No usar malloc, printf, string.h
-- Servidor Node.js: `'use strict'`, `const`/`let`, sin `var`
-
----
-
-## LIMITACIONES Z80 QUE AFECTAN AL DISENO
-
-| Restriccion | Impacto |
-|---|---|
-| Z80 @ 3.58 MHz | Timeouts generosos (90s en servidor) |
-| InterNestor a 50 Hz | Max 4 paquetes procesados por frame en Net_Poll() |
-| Buffer TCP ~512-1024B | Payload max 255 bytes por paquete |
-| Sin TLS posible | Auth por token en claro. Canal no cifrado |
-| ObsoNET drops frecuentes | ECONNRESET silenciado en servidor. STATE_DISCONNECTED en cliente |
-| Chunks TCP parciales | Buffer acumulativo obligatorio en servidor Y en cliente |
-| REGLA CRITICA | NUNCA llamar Net_Recv() sin comprobar antes Net_Available() |
+- Screen 5 (256x212, 16 colores bitmap)
+- Sprites Mode 2 (VDP_SetSpriteExUniColor)
+- Lobby grafico con lista de salas
+- Movimiento con cursores + joystick
+- Multiplayer funcional en MSX real
+- GAME_ID = 0x01, modo RELAY
 
 ---
 
-## LIMITACIONES Y NOTAS IMPORTANTES
+## BURDYN RPG (BURD_012)
 
-- **IP del servidor hardcoded** — La IP del VPS esta en `msxonlin.c` como array de bytes. Hay que recompilar para cambiar de servidor. No hay DNS ni configuracion en runtime.
-- **Sin TLS** — La conexion es TCP plano. El token de auth viaja en claro. Limitacion del Z80.
-- **InterNestor Lite debe cargarse antes** — El TSR de TCP/IP debe estar residente en RAM antes de ejecutar msxonlin.com. Sin el, el programa muestra "UNAPI no hallado".
-- **Limite 8 caracteres DOS** — El binario se llama `msxonlin.com` (no `msxonline`) por el limite de nombres de archivo en MSX-DOS.
-- **MSXgl es un repositorio git independiente** — El directorio `MSXgl/` tiene su propio `.git`. No es un submodulo del proyecto principal (que aun no es un repo git).
-- **client/ es solo referencia** — Los archivos en `client/` son copias de los de `MSXgl/projects/msxonline/`. El directorio de trabajo real es el de MSXgl. Si se edita algo, editar en MSXgl y copiar a client/ si se quiere mantener sincronizado.
-
----
-
-## WORKSPACE VSCODE (msxonline.code-workspace)
-
-Configurado con multi-carpeta: server/, client/, MSXgl/projects/msxonline/, docs/. Incluye paths de IntelliSense para SDCC + MSXgl y configuracion de formatter JavaScript.
+- Screen 4 (Graphic 3, 32x24 tiles)
+- Mapa 64x64 cargado desde BURDYN.MAP
+- Viewport 24x24 con scroll centrado + HUD sidebar 8 columnas
+- 83 tiles: 8 terreno + 32 items + 43 fuente
+- Sprites Mode 2 para jugadores (colores por PID)
+- Name table buffer 768 bytes con dirty tile tracking
+- Lobby grafico filtrado por GAME_ID_CRAWLER
+- Multiplayer AGGREGATE (WORLD_STATE 10Hz)
+- Editor de mapas HTML (burdyn/editor.html)
+- GAME_ID = 0x03, modo AGGREGATE
 
 ---
 
-## CONFIGURACION DEL CLIENTE (editar antes de compilar)
+## REGLAS PARA CLAUDE
 
-En `msxonlin.c`:
-```c
-static const u8 SERVER_IP[4] = { 217, 154, 107, 144 }; // IP del VPS
-#define SERVER_PORT     9876
-#define MOVE_SPEED      2       // Pixeles/frame
-#define PING_INTERVAL   250     // Frames entre keepalives (~5s a 50Hz)
-```
-
----
-
-## PROBLEMAS RESUELTOS
-
-### Salida a MSX-DOS (2026-03-17)
-- **Problema**: El programa no volvia a MSX-DOS al pulsar ESC
-- **Causa**: `main()` retornaba void y el crt0 intentaba ejecutar BDOS con stack/interrupciones corruptas por las funciones VDP de MSXgl
-- **Solucion**: Llamar `Bios_Exit(0)` directamente en `Game_Shutdown()` en vez de confiar en el retorno de main()
-
-### Texto ilegible en HUD (2026-03-17)
-- **Problema**: El texto en Screen 5 salia como basura (colores correctos, caracteres ilegibles)
-- **Causa**: `Print_SetFont(NULL)` no funciona en modo bitmap — la fuente BIOS no se carga bien
-- **Solucion**: Usar fuente embebida `g_Font_MGL_Sample6` via `#include "font/font_mgl_sample6.h"`
-
-### SDCC calling convention — IPs basura y TCP sin datos (2026-03-18)
-- **Problema**: La pantalla de diagnostico mostraba IPs inventadas (58.157.100.135 en vez de 192.168.1.164). El TCP handshake fallaba o los datos no llegaban al servidor.
-- **Causa**: SDCC 4.5.0 usa `sdcccall(1)` por defecto (primer param en registros HL/A). El codigo ASM de UNAPI (`unapi_tcp.asm`) fue escrito para `sdcccall(0)` (todos los params en stack via `get_pointer_to_var`). Resultado: los punteros a structs iban a direcciones equivocadas.
-- **Solucion**: Anadir `__sdcccall(0)` a CADA declaracion extern en `unapi_tcp.h`. Sintaxis: `extern int tcpip_func(...) __sdcccall(0);` (atributo DESPUES de los parentesis, ANTES del punto y coma).
-- **IMPORTANTE**: NO usar `--sdcccall 0` como flag global de compilacion — rompe las funciones `__NAKED` de MSXgl (DOS, VDP, BIOS) que esperan `sdcccall(1)`.
-
-### Modulo DOS no linkado — crash al arrancar (2026-03-18)
-- **Problema**: MOL_014 crasheaba instantaneamente sin mostrar nada
-- **Causa**: `log.h` usa `DOS_CreateHandle`/`DOS_WriteHandle`/`DOS_CloseHandle` pero `"dos"` no estaba en `LibModules` de `project_config.js`. Las funciones saltaban a memoria vacia.
-- **Solucion**: Anadir `"dos"` a `LibModules` en `project_config.js`
-
-### Inline corrompe stack en Z80 (2026-03-18)
-- **Problema**: Funciones `inline` en headers que llaman a funciones `__NAKED` (BDOS/UNAPI) corrompen el stack
-- **Causa**: SDCC Z80 no maneja bien el inlining cuando hay interaccion con ASM `__NAKED`
-- **Solucion**: Usar `static` en vez de `inline` en todas las funciones de `network.h` y `log.h`
-
-### TCP conecta pero datos no llegan al servidor (2026-03-18) — EN INVESTIGACION
-- **Problema**: `tcpip_tcp_send` retorna ERR_OK pero el servidor nunca recibe los bytes
-- **Causa probable**: InterNestor bufferiza los datos y no los envia hasta que se hace flush
-- **Fix en MOL_020**: Se anade `tcpip_tcp_flush()` automaticamente despues de cada `tcpip_tcp_send()` en `Net_Send()`. PENDIENTE DE PROBAR.
+1. **NUNCA tocar conectividad cuando se piden cambios de UI** — rompe la conexion
+2. **NUNCA hacer cambios que no se pidieron** — cada byte extra puede romper UNAPI
+3. **NUNCA restaurar desde repo sin re-aplicar fixes de network.h** — g_ConnResult, flush
+4. **"Cliente" = MSX siempre** — nunca PC client salvo que se diga explicitamente
+5. **ForceRamAddr = 0x8000 siempre** en project_config.js
+6. **Builds versionadas**: MOL_XXX (Ball Demo), BURD_XXX (Burdyn), max 5 copias
+7. **SDCC: variables al inicio de funcion**, no declarar dentro de for/if
 
 ---
 
-## PENDIENTE — Proximos pasos
-
-- [x] **Pantalla de lobby** — lista de salas con jugadores, cursor, crear/unir/refrescar
-- [x] **Unirse a sala existente** — seleccionar de lista o introducir Room ID manualmente
-- [x] **Cliente PC** — HTML5 Canvas via bridge WebSocket, mismo protocolo que MSX
-- [x] **Pantalla de diagnostico** — muestra IP local, mascara, gateway, servidor, puerto en Screen 0
-- [x] **Conexion TCP al VPS** — handshake completa desde MSX real (192.168.1.164 -> 217.154.107.144)
-- [ ] **Auth + lobby en MSX real** — pendiente fix flush (MOL_020)
-- [ ] **Test multijugador MSX + PC** — un MSX real y un PC client en la misma sala
-- [ ] **Segundo juego** — definir nuevo GAME_ID y payload STATE_UPDATE diferente
-
----
-
-_Proyecto de Antxiko · MSX Online Game Server v2.0_
+_Proyecto de Antxiko · MSX Online v2.0_

@@ -392,7 +392,7 @@ static u8 g_ScrollY = 0;
 static bool g_MapDirty = TRUE;
 static bool g_HUDDirty = TRUE;
 static u8 g_MoveDelay = 0;
-#define MOVE_RATE   4
+#define MOVE_RATE   2
 
 // Inventario
 #define INV_SLOTS   8
@@ -407,9 +407,12 @@ static u8 g_MaxMP = 50;
 static u8 g_Level = 1;
 static u8 g_Gold = 0;
 
-// Name table buffer
-static u8 g_NameBuf[768];
-static bool g_NameDirty = TRUE;
+// Name table: buffer de trabajo + dirty tracking
+static u8 g_NameBuf[768];            // Buffer de trabajo (RAM)
+#define NB_DIRTY_MAX 128              // Max tiles cambiados por frame
+static u16 g_NbDirtyIdx[NB_DIRTY_MAX];
+static u8 g_NbDirtyCount = 0;
+static bool g_FullFlush = TRUE;       // TRUE = volcar todo (primera vez)
 
 // Lobby
 #define LOBBY_MAX_ROOMS 10
@@ -427,6 +430,14 @@ static u8 g_LobbyCursor = 0;
 #define STATE_LOBBY      1
 #define STATE_PLAYING    2
 static u8 g_GameState = STATE_LOBBY_WAIT;
+
+// Buffer de teclas: se capturan en un frame, se procesan en el siguiente
+static u8 g_KeyUp = 0;
+static u8 g_KeyDown = 0;
+static u8 g_KeyRet = 0;
+static u8 g_KeyC = 0;
+static u8 g_KeyR = 0;
+static u8 g_KeyEsc = 0;
 
 // Red
 static NetConn g_Conn = NET_INVALID_CONN;
@@ -757,6 +768,7 @@ void Net_ProcessPacket(u8 cmd, u8* payload, u8 len)
         Scroll_Update();
         g_MapDirty = TRUE;
         g_HUDDirty = TRUE;
+        g_FullFlush = TRUE;
     }
     else if(cmd == CMD_WORLD_STATE && len >= 3)
     {
@@ -1075,46 +1087,23 @@ void Scroll_Update(void)
 // Tile especial para el HUD (fondo oscuro)
 #define HUD_BG  TILE_WALL
 
-void Map_DrawViewport(void)
-{
-    u8 tx, ty;
-    u16 bufIdx;
-
-    for(ty = 0; ty < VIEW_H; ty++)
-    {
-        u8 mapY = g_ScrollY + ty;
-        bufIdx = (u16)ty * 32;
-
-        // 24 columnas de mapa
-        for(tx = 0; tx < VIEW_W; tx++)
-        {
-            u8 mapX = g_ScrollX + tx;
-            if(mapX < MAP_W && mapY < MAP_H)
-                g_NameBuf[bufIdx + tx] = g_Map[(u16)mapY * MAP_W + mapX];
-            else
-                g_NameBuf[bufIdx + tx] = TILE_WALL;
-        }
-    }
-
-    g_MapDirty = FALSE;
-    g_NameDirty = TRUE;
-}
-
-//=============================================================================
-// HUD — sidebar derecha (columnas 24-31)
-//=============================================================================
-
-// Escribir un tile al buffer (no a VRAM)
+// Escribir un tile al buffer con dirty tracking
 void Buf_PutTile(u8 col, u8 row, u8 tile)
 {
-    g_NameBuf[(u16)row * 32 + col] = tile;
+    u16 idx = (u16)row * 32 + col;
+    if(g_NameBuf[idx] != tile)
+    {
+        g_NameBuf[idx] = tile;
+        if(g_NbDirtyCount < NB_DIRTY_MAX)
+            g_NbDirtyIdx[g_NbDirtyCount++] = idx;
+        else
+            g_FullFlush = TRUE; // Desbordado: volcar todo
+    }
 }
 
-// Escribir texto al buffer usando tiles de fuente
-// Solo soporta A-Z mayusculas, 0-9, espacio, :, /
+// Escribir texto al buffer
 void Buf_PutText(u8 col, u8 row, const c8* text)
 {
-    u16 base = (u16)row * 32 + col;
     while(*text && col < 32)
     {
         u8 ch = (u8)*text;
@@ -1131,36 +1120,59 @@ void Buf_PutText(u8 col, u8 row, const c8* text)
             tile = TILE_SLASH;
         else
             tile = TILE_SPC;
-        g_NameBuf[base] = tile;
-        base++;
+        Buf_PutTile(col, row, tile);
         col++;
         text++;
     }
 }
 
-// Escribir un numero (0-255) al buffer
+// Escribir numero al buffer
 void Buf_PutNum(u8 col, u8 row, u8 val)
 {
     u8 h = val / 100;
     u8 t = (val % 100) / 10;
     u8 u = val % 10;
-    u16 base = (u16)row * 32 + col;
     if(h > 0)
     {
-        g_NameBuf[base++] = 67 + h;
-        g_NameBuf[base++] = 67 + t;
-        g_NameBuf[base] = 67 + u;
+        Buf_PutTile(col++, row, 67 + h);
+        Buf_PutTile(col++, row, 67 + t);
+        Buf_PutTile(col, row, 67 + u);
     }
     else if(t > 0)
     {
-        g_NameBuf[base++] = 67 + t;
-        g_NameBuf[base] = 67 + u;
+        Buf_PutTile(col++, row, 67 + t);
+        Buf_PutTile(col, row, 67 + u);
     }
     else
     {
-        g_NameBuf[base] = 67 + u;
+        Buf_PutTile(col, row, 67 + u);
     }
 }
+
+void Map_DrawViewport(void)
+{
+    u8 tx, ty, mapX, mapY, tile;
+
+    for(ty = 0; ty < VIEW_H; ty++)
+    {
+        mapY = g_ScrollY + ty;
+        for(tx = 0; tx < VIEW_W; tx++)
+        {
+            mapX = g_ScrollX + tx;
+            if(mapX < MAP_W && mapY < MAP_H)
+                tile = g_Map[(u16)mapY * MAP_W + mapX];
+            else
+                tile = TILE_WALL;
+            Buf_PutTile(tx, ty, tile);
+        }
+    }
+
+    g_MapDirty = FALSE;
+}
+
+//=============================================================================
+// HUD — sidebar derecha (columnas 24-31)
+//=============================================================================
 
 void HUD_Draw(void)
 {
@@ -1174,7 +1186,7 @@ void HUD_Draw(void)
     {
         u8 c;
         for(c = HUD_COL; c < 32; c++)
-            g_NameBuf[(u16)i * 32 + c] = TILE_SPC;
+            Buf_PutTile(c, i, TILE_SPC);
     }
 
     // Separador vertical (columna 24)
@@ -1225,7 +1237,6 @@ void HUD_Draw(void)
     }
 
     g_HUDDirty = FALSE;
-    g_NameDirty = TRUE;
 }
 
 //=============================================================================
@@ -1245,6 +1256,83 @@ void Player_UpdateSprite(void)
 //=============================================================================
 // INPUT Y MOVIMIENTO
 //=============================================================================
+
+// Scroll incremental: desplazar buffer y rellenar columna nueva
+void Map_ScrollColumn(i8 dx)
+{
+    u8 ty, tx;
+    u8 newCol;
+    u8 mapX;
+
+    if(dx > 0)
+    {
+        // Scroll derecha: desplazar buffer a la izquierda, rellenar columna derecha
+        for(ty = 0; ty < VIEW_H; ty++)
+        {
+            u16 base = (u16)ty * 32;
+            for(tx = 0; tx < VIEW_W - 1; tx++)
+                Buf_PutTile(tx, ty, g_NameBuf[base + tx + 1]);
+            // Columna nueva (la de la derecha)
+            mapX = g_ScrollX + VIEW_W - 1;
+            Buf_PutTile(VIEW_W - 1, ty, (mapX < MAP_W) ? g_Map[(u16)(g_ScrollY + ty) * MAP_W + mapX] : TILE_WALL);
+        }
+    }
+    else
+    {
+        // Scroll izquierda: desplazar buffer a la derecha, rellenar columna izquierda
+        for(ty = 0; ty < VIEW_H; ty++)
+        {
+            u16 base = (u16)ty * 32;
+            for(tx = VIEW_W - 1; tx > 0; tx--)
+                Buf_PutTile(tx, ty, g_NameBuf[base + tx - 1]);
+            // Columna nueva (la de la izquierda)
+            mapX = g_ScrollX;
+            Buf_PutTile(0, ty, (mapX < MAP_W) ? g_Map[(u16)(g_ScrollY + ty) * MAP_W + mapX] : TILE_WALL);
+        }
+    }
+}
+
+// Scroll incremental: desplazar buffer y rellenar fila nueva
+void Map_ScrollRow(i8 dy)
+{
+    u8 tx, ty;
+    u8 mapY;
+
+    if(dy > 0)
+    {
+        // Scroll abajo: desplazar buffer arriba, rellenar fila inferior
+        for(ty = 0; ty < VIEW_H - 1; ty++)
+        {
+            u16 src = (u16)(ty + 1) * 32;
+            for(tx = 0; tx < VIEW_W; tx++)
+                Buf_PutTile(tx, ty, g_NameBuf[src + tx]);
+        }
+        // Fila nueva (la de abajo)
+        mapY = g_ScrollY + VIEW_H - 1;
+        for(tx = 0; tx < VIEW_W; tx++)
+        {
+            u8 mapX = g_ScrollX + tx;
+            Buf_PutTile(tx, VIEW_H - 1, (mapX < MAP_W && mapY < MAP_H) ? g_Map[(u16)mapY * MAP_W + mapX] : TILE_WALL);
+        }
+    }
+    else
+    {
+        // Scroll arriba: desplazar buffer abajo, rellenar fila superior
+        for(ty = VIEW_H - 1; ty > 0; ty--)
+        {
+            u16 src = (u16)(ty - 1) * 32;
+            for(tx = 0; tx < VIEW_W; tx++)
+                Buf_PutTile(tx, ty, g_NameBuf[src + tx]);
+        }
+        // Fila nueva (la de arriba)
+        mapY = g_ScrollY;
+        for(tx = 0; tx < VIEW_W; tx++)
+        {
+            u8 mapX = g_ScrollX + tx;
+            Buf_PutTile(tx, 0, (mapX < MAP_W && mapY < MAP_H) ? g_Map[(u16)mapY * MAP_W + mapX] : TILE_WALL);
+        }
+    }
+}
 
 bool Map_IsWalkable(u8 x, u8 y)
 {
@@ -1305,7 +1393,23 @@ void Player_Move(void)
         u8 oldSY = g_ScrollY;
         Scroll_Update();
         if(g_ScrollX != oldSX || g_ScrollY != oldSY)
-            g_MapDirty = TRUE;
+        {
+            // Scroll cambio: volcar mapa completo (576 tiles)
+            // Escribir directo al buffer sin dirty tracking (mas rapido)
+            // y marcar full flush
+            u8 tx, ty, mapX, mapY;
+            for(ty = 0; ty < VIEW_H; ty++)
+            {
+                u16 bufBase = (u16)ty * 32;
+                mapY = g_ScrollY + ty;
+                for(tx = 0; tx < VIEW_W; tx++)
+                {
+                    mapX = g_ScrollX + tx;
+                    g_NameBuf[bufBase + tx] = (mapX < MAP_W && mapY < MAP_H) ? g_Map[(u16)mapY * MAP_W + mapX] : TILE_WALL;
+                }
+            }
+            g_FullFlush = TRUE;
+        }
     }
 }
 
@@ -1318,8 +1422,9 @@ void Lobby_Draw(void)
     u8 i;
     u16 idx;
 
-    // Limpiar buffer completo
+    // Limpiar buffer completo (forzar full flush)
     for(idx = 0; idx < 768; idx++) g_NameBuf[idx] = TILE_SPC;
+    g_FullFlush = TRUE;
 
     Buf_PutText(5, 1, "BURDYN");
     Buf_PutText(2, 3, "SALAS DISPONIBLES");
@@ -1350,34 +1455,54 @@ void Lobby_Draw(void)
 
     Buf_PutText(2, 22, "C CREAR  ENTER UNIR");
     Buf_PutText(2, 23, "R REFRESCAR  ESC SALIR");
+}
 
-    g_NameDirty = TRUE;
+void Lobby_MoveCursor(u8 oldPos, u8 newPos)
+{
+    // Borrar cursor viejo
+    u8 oldRow = 7 + oldPos * 2;
+    Buf_PutTile(1, oldRow, TILE_SPC);
+    // Poner cursor nuevo
+    u8 newRow = 7 + newPos * 2;
+    Buf_PutTile(1, newRow, TILE_CURSOR);
 }
 
 void Lobby_ProcessInput(void)
 {
-    if(Keyboard_IsKeyPushed(KEY_UP))
+    if(g_KeyUp)
     {
-        if(g_LobbyCursor > 0) g_LobbyCursor--;
-        Lobby_Draw();
+        g_KeyUp = 0;
+        if(g_LobbyCursor > 0)
+        {
+            u8 old = g_LobbyCursor;
+            g_LobbyCursor--;
+            Lobby_MoveCursor(old, g_LobbyCursor);
+        }
     }
-    if(Keyboard_IsKeyPushed(KEY_DOWN))
+    if(g_KeyDown)
     {
+        g_KeyDown = 0;
         if(g_LobbyCount > 0 && g_LobbyCursor < g_LobbyCount - 1)
+        {
+            u8 old = g_LobbyCursor;
             g_LobbyCursor++;
-        Lobby_Draw();
+            Lobby_MoveCursor(old, g_LobbyCursor);
+        }
     }
-    if(Keyboard_IsKeyPushed(KEY_RET))
+    if(g_KeyRet)
     {
+        g_KeyRet = 0;
         if(g_LobbyCount > 0)
             Net_JoinRoom(g_LobbyRooms[g_LobbyCursor].roomId);
     }
-    if(Keyboard_IsKeyPushed(KEY_C))
+    if(g_KeyC)
     {
+        g_KeyC = 0;
         Net_CreateRoom();
     }
-    if(Keyboard_IsKeyPushed(KEY_R))
+    if(g_KeyR)
     {
+        g_KeyR = 0;
         g_GameState = STATE_LOBBY_WAIT;
         Net_RequestRoomList();
     }
@@ -1413,6 +1538,9 @@ void main(void)
         Map_Generate();
     VDP_LoadTileset();
 
+    // Primera vez: forzar volcado completo
+    g_FullFlush = TRUE;
+
     // Empezar en lobby si online, o directo al juego si offline
     if(online)
     {
@@ -1435,18 +1563,39 @@ void main(void)
     {
         Halt();
 
-        // Volcar buffer a VRAM
-        if(g_NameDirty)
+        // Volcar a VRAM: full flush o solo dirty tiles
+        if(g_FullFlush)
         {
             VDP_WriteVRAM(g_NameBuf, 0x1800, 0, 768);
-            g_NameDirty = FALSE;
+            g_FullFlush = FALSE;
+            g_NbDirtyCount = 0;
+        }
+        else if(g_NbDirtyCount > 0)
+        {
+            u8 d;
+            for(d = 0; d < g_NbDirtyCount; d++)
+            {
+                u16 idx = g_NbDirtyIdx[d];
+                VDP_WriteVRAM(g_NameBuf + idx, 0x1800 + idx, 0, 1);
+            }
+            g_NbDirtyCount = 0;
         }
 
         Keyboard_Update();
 
+        // Vaciar buffer teclado BIOS (evitar acumulacion para DOS)
+        *((u16*)0xF3F8) = *((u16*)0xF3FA);
+
+        // Capturar teclas en flags (se procesan en este mismo frame)
+        if(Keyboard_IsKeyPushed(KEY_UP))    g_KeyUp = 1;
+        if(Keyboard_IsKeyPushed(KEY_DOWN))  g_KeyDown = 1;
+        if(Keyboard_IsKeyPushed(KEY_RET))   g_KeyRet = 1;
+        if(Keyboard_IsKeyPushed(KEY_C))     g_KeyC = 1;
+        if(Keyboard_IsKeyPushed(KEY_R))     g_KeyR = 1;
+        if(Keyboard_IsKeyPushed(KEY_ESC))   g_KeyEsc = 1;
+
         // ESC = salir
-        if(Keyboard_IsKeyPressed(KEY_ESC))
-            break;
+        if(g_KeyEsc) break;
 
         if(g_GameState == STATE_LOBBY_WAIT)
         {
@@ -1456,7 +1605,23 @@ void main(void)
         else if(g_GameState == STATE_LOBBY)
         {
             Lobby_ProcessInput();
-            Net_Poll();
+            // Solo poll ligero: 1 paquete max (para ROOM_LIST response)
+            {
+                u16 avail = Net_Available(g_Conn);
+                if(avail >= 6)
+                {
+                    u8 hdr[6];
+                    u8 pl[255];
+                    Net_Recv(g_Conn, hdr, 6);
+                    if(hdr[0] == PROTO_MAGIC_0 && hdr[1] == PROTO_MAGIC_1 && hdr[5] > 0)
+                    {
+                        while(Net_Available(g_Conn) < hdr[5]) Halt();
+                        Net_Recv(g_Conn, pl, hdr[5]);
+                    }
+                    if(hdr[0] == PROTO_MAGIC_0 && hdr[1] == PROTO_MAGIC_1)
+                        Net_ProcessPacket(hdr[2], pl, hdr[5]);
+                }
+            }
         }
         else if(g_GameState == STATE_PLAYING)
         {
@@ -1487,5 +1652,10 @@ void main(void)
 
     for(i = 0; i < 8; i++)
         VDP_SetSpriteExUniColor(i, 0, 209, 0, 0);
+
+    // Limpiar buffer teclado antes de volver a DOS
+    // KILBUF + forzar PUTPNT = GETPNT
+    Bios_MainCall(0x0156);
+    *((u16*)0xF3F8) = *((u16*)0xF3FA);
     Bios_Exit(0);
 }
