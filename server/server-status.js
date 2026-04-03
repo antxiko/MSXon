@@ -231,7 +231,7 @@ const ghosts = []; // Array de { socket, interval, roomId, pid }
 function createGhostConnection() {
     return new Promise((resolve, reject) => {
         const sock = new net.Socket();
-        sock.setTimeout(10000);
+        sock.setTimeout(10000); // Timeout solo para conexion+auth
         sock.connect(SERVER_PORT, SERVER_IP, () => {
             sock.write(buildPacket(CMD.AUTH, 0, 0, AUTH_TOKEN));
         });
@@ -247,7 +247,11 @@ function createGhostConnection() {
                 const cmd = buf[2];
                 const payload = buf.subarray(6, 6 + len);
                 buf = buf.subarray(6 + len);
-                if (cmd === 0x11) resolve({ sock, buf }); // AUTH_OK
+                if (cmd === 0x11) {
+                    sock.setTimeout(0); // Quitar timeout tras auth
+                    sock.removeAllListeners('timeout');
+                    resolve({ sock, buf });
+                }
                 if (cmd === 0x12) reject(new Error('Auth fail'));
             }
         });
@@ -458,94 +462,196 @@ async function startDamasGhost() {
     }
 
     try {
-        const { sock } = await createGhostConnection();
+        // Conexion dedicada para el ghost de damas
+        const damasSock = new net.Socket();
 
-        // Buscar sala de damas o crear una
-        const listPkt = await ghostSendAndWait(sock, CMD.ROOM_LIST, null, CMD.ROOM_LIST);
-        const count = listPkt.payload.length > 0 ? listPkt.payload[0] : 0;
+        await new Promise((resolve, reject) => {
+            let authTimer = setTimeout(() => { damasSock.destroy(); reject(new Error('Auth timeout')); }, 10000);
+            damasSock.connect(SERVER_PORT, SERVER_IP, () => {
+                damasSock.write(buildPacket(CMD.AUTH, 0, 0, AUTH_TOKEN));
+            });
+            let authBuf = Buffer.alloc(0);
+            const authHandler = (chunk) => {
+                authBuf = Buffer.concat([authBuf, chunk]);
+                if (authBuf.length >= 6 && authBuf[2] === 0x11) {
+                    clearTimeout(authTimer);
+                    damasSock.removeListener('data', authHandler);
+                    resolve();
+                }
+            };
+            damasSock.on('data', authHandler);
+            damasSock.on('error', (e) => { clearTimeout(authTimer); reject(e); });
+        });
 
-        let roomId, pid;
-        let damasSala = null;
+        console.log('  Ghost damas: auth OK');
 
-        // Buscar sala de damas con sitio
-        for (let i = 0; i < count; i++) {
-            const off = 1 + i * 3;
-            if (listPkt.payload[off + 1] === 0x02 && listPkt.payload[off + 2] < 2) {
-                damasSala = listPkt.payload[off];
-                break;
-            }
-        }
+        // Crear sala
+        const roomInfo = await new Promise((resolve, reject) => {
+            let roomTimer = setTimeout(() => reject(new Error('Room timeout')), 5000);
+            damasSock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x02, 2, 0x01])));
+            let roomBuf = Buffer.alloc(0);
+            const roomHandler = (chunk) => {
+                roomBuf = Buffer.concat([roomBuf, chunk]);
+                while (roomBuf.length >= 6) {
+                    const idx = roomBuf.indexOf(Buffer.from([0x46, 0x4D]));
+                    if (idx < 0) { roomBuf = Buffer.alloc(0); break; }
+                    if (idx > 0) { roomBuf = roomBuf.subarray(idx); continue; }
+                    const len = roomBuf[5];
+                    if (roomBuf.length < 6 + len) break;
+                    if (roomBuf[2] === CMD.ROOM_INFO) {
+                        clearTimeout(roomTimer);
+                        const payload = Buffer.from(roomBuf.subarray(6, 6 + len));
+                        damasSock.removeListener('data', roomHandler);
+                        resolve(payload);
+                        return;
+                    }
+                    roomBuf = roomBuf.subarray(6 + len);
+                }
+            };
+            damasSock.on('data', roomHandler);
+        });
 
-        if (damasSala) {
-            const joinPkt = await ghostSendAndWait(sock, CMD.ROOM_JOIN, Buffer.from([damasSala]), CMD.ROOM_INFO);
-            roomId = joinPkt.payload[0];
-            pid = joinPkt.payload[3];
-            console.log(`\nGhost damas: unido a sala 0x${roomId.toString(16).padStart(2, '0')} como P${pid}`);
-        } else {
-            const infoPkt = await ghostSendAndWait(sock, CMD.ROOM_CREATE, Buffer.from([0x02, 2, 0x01]), CMD.ROOM_INFO);
-            roomId = infoPkt.payload[0];
-            pid = infoPkt.payload[3];
-            console.log(`\nGhost damas: sala creada 0x${roomId.toString(16).padStart(2, '0')} como P${pid}`);
-        }
+        const roomId = roomInfo[0];
+        const pid = roomInfo[3];
+        const sock = damasSock;
+
+        console.log(`\nGhost damas: sala creada 0x${roomId.toString(16).padStart(2, '0')} como P${pid}`);
+        console.log('Esperando rival humano...');
 
         const myColor = (pid === 1) ? PIECE_WHITE : PIECE_BLACK;
         const board = damasInitBoard();
         let turn = PIECE_WHITE;
         let moveCount = 0;
+        let gameStarted = (pid === 2); // Si somos P2, el P1 ya estaba — juego empieza
 
-        console.log(`Ghost juega con ${myColor === PIECE_WHITE ? 'BLANCAS' : 'NEGRAS'}. "stopd" para parar.\n`);
+        console.log(`Ghost juega con ${myColor === PIECE_WHITE ? 'BLANCAS' : 'NEGRAS'}. ${gameStarted ? 'Partida en curso!' : 'Esperando rival...'} "stopd" para parar.\n`);
 
         // Escuchar movimientos del oponente
         let recvBuf = Buffer.alloc(0);
+        sock.removeAllListeners('data'); // Limpiar handlers previos de ghostSendAndWait
         sock.on('data', (chunk) => {
-            recvBuf = Buffer.concat([recvBuf, chunk]);
-            while (recvBuf.length >= 6) {
-                if (recvBuf[0] !== 0x46 || recvBuf[1] !== 0x4D) { recvBuf = recvBuf.subarray(1); continue; }
-                const len = recvBuf[5];
-                if (recvBuf.length < 6 + len) break;
-                const cmd = recvBuf[2];
-                const payload = recvBuf.subarray(6, 6 + len);
-                recvBuf = recvBuf.subarray(6 + len);
+            try {
+                recvBuf = Buffer.concat([recvBuf, chunk]);
+                while (recvBuf.length >= 6) {
+                    // Buscar magic
+                    const idx = recvBuf.indexOf(Buffer.from([0x46, 0x4D]));
+                    if (idx < 0) { recvBuf = Buffer.alloc(0); break; }
+                    if (idx > 0) { recvBuf = recvBuf.subarray(idx); continue; }
 
-                if (cmd === 0x40 && len >= 4) {
-                    // Movimiento del oponente
-                    const fx = payload[0], fy = payload[1], tx = payload[2], ty = payload[3];
-                    damasExecuteMove(board, fx, fy, tx, ty);
-                    turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
-                    console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'}`);
+                    const len = recvBuf[5];
+                    if (recvBuf.length < 6 + len) break;
+
+                    const cmd = recvBuf[2];
+                    const payload = Buffer.from(recvBuf.subarray(6, 6 + len));
+                    recvBuf = recvBuf.subarray(6 + len);
+
+                    if (cmd === 0x40 && len >= 4) {
+                        const fx = payload[0], fy = payload[1], tx = payload[2], ty = payload[3];
+                        if (fx === tx && fy === ty) {
+                            console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) IGNORADO`);
+                        } else if (fx < 8 && fy < 8 && tx < 8 && ty < 8) {
+                            damasExecuteMove(board, fx, fy, tx, ty);
+                            turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
+                            console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'}`);
+                        }
+                    }
+                    else if (cmd === 0x30) {
+                        gameStarted = true;
+                        console.log('  Oponente conectado! Partida empieza.');
+                    }
+                    // Ignorar PONG (0x02) y otros paquetes silenciosamente
                 }
-                if (cmd === 0x30) {
-                    // PLAYER_JOINED — el oponente llego
-                    console.log('  Oponente conectado!');
-                }
+            } catch(e) {
+                console.log(`  Ghost data error: ${e.message}`);
             }
         });
+        sock.on('error', (err) => {
+            if (err.code !== 'ECONNRESET') console.log(`  Ghost socket error: ${err.message}`);
+        });
+        sock.on('close', () => {
+            console.log('  Ghost damas: socket cerrado');
+            if (damasGhost) { clearInterval(damasGhost.interval); damasGhost = null; }
+        });
 
-        // Hacer jugadas periodicamente
+        // Keepalive + jugadas
+        let pingCounter = 0;
+        let multiCapX = -1, multiCapY = -1; // Multi-captura en curso
+
         const interval = setInterval(() => {
-            if (turn !== myColor) return; // No es mi turno
+            // Ping cada 30 ticks (~60s a 2s/tick)
+            pingCounter++;
+            if (pingCounter >= 30) {
+                pingCounter = 0;
+                if (!sock.destroyed) sock.write(buildPacket(0x01, roomId, pid));
+            }
 
-            const validMoves = damasFindMoves(board, myColor);
+            if (!gameStarted) return;
+            if (turn !== myColor) return;
+
+            // Buscar movimientos validos
+            let validMoves;
+            if (multiCapX >= 0) {
+                // Multi-captura: solo capturas de la ficha en curso
+                validMoves = damasFindMoves(board, myColor).filter(
+                    m => m.fx === multiCapX && m.fy === multiCapY && Math.abs(m.tx - m.fx) >= 2
+                );
+                if (validMoves.length === 0) {
+                    // No mas capturas: turno pasa al oponente
+                    multiCapX = -1;
+                    multiCapY = -1;
+                    turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
+                    console.log(`  Multi-captura fin. Turno: ${turn === PIECE_WHITE ? 'BLANCAS' : 'NEGRAS'}`);
+                    return;
+                }
+            } else {
+                validMoves = damasFindMoves(board, myColor);
+            }
+
             if (validMoves.length === 0) {
-                console.log('  Ghost sin movimientos — partida terminada');
-                clearInterval(interval);
+                console.log('  Ghost sin movimientos. Tablero:');
+                for (let r = 0; r < 8; r++) {
+                    let row = '  ';
+                    for (let c = 0; c < 8; c++) {
+                        const p = board[r][c];
+                        row += p === 0 ? '.' : p === 1 ? 'w' : p === 2 ? 'b' : p === 3 ? 'W' : 'B';
+                    }
+                    console.log(row);
+                }
                 return;
             }
 
-            // Elegir movimiento: priorizar capturas, sino aleatorio
+            // Elegir y ejecutar movimiento
             const move = validMoves[Math.floor(Math.random() * validMoves.length)];
+            const isCapture = Math.abs(move.tx - move.fx) >= 2;
+
             damasExecuteMove(board, move.fx, move.fy, move.tx, move.ty);
 
-            // Enviar movimiento
+            // Enviar al servidor
             const payload = Buffer.from([move.fx, move.fy, move.tx, move.ty, turn, 0, 0, 0]);
-            if (!sock.destroyed) {
-                sock.write(buildPacket(0x40, roomId, pid, payload));
-            }
+            if (!sock.destroyed) sock.write(buildPacket(0x40, roomId, pid, payload));
             moveCount++;
-            turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
-            console.log(`  Ghost: (${move.fx},${move.fy})->(${move.tx},${move.ty}) | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'} | Jugada #${moveCount}`);
+            console.log(`  Ghost: (${move.fx},${move.fy})->(${move.tx},${move.ty})${isCapture ? ' CAPTURA' : ''} | #${moveCount}`);
 
-        }, 2000); // Juega cada 2 segundos
+            if (isCapture) {
+                // Comprobar si puede seguir capturando
+                const moreCaps = damasFindMoves(board, myColor).filter(
+                    m => m.fx === move.tx && m.fy === move.ty && Math.abs(m.tx - m.fx) >= 2
+                );
+                if (moreCaps.length > 0) {
+                    multiCapX = move.tx;
+                    multiCapY = move.ty;
+                    console.log('  Multi-captura posible, sigue...');
+                    return; // No cambiar turno, seguir en el proximo tick
+                }
+            }
+
+            // Turno pasa al oponente
+            multiCapX = -1;
+            multiCapY = -1;
+            turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
+            console.log(`  Turno: ${turn === PIECE_WHITE ? 'BLANCAS' : 'NEGRAS'}`);
+
+        }, 2000);
 
         damasGhost = { socket: sock, interval, board, roomId, pid, myColor };
 
@@ -593,6 +699,7 @@ function showMenu() {
     console.log('  7. Parar ghosts Burdyn');
     console.log('  8. Ghost Damas (IA basica)');
     console.log('  9. Parar ghost Damas');
+    console.log('  x. Reiniciar servidor (limpia salas)');
     console.log('  0. Salir');
     console.log('═══════════════════════════════════════');
 }
@@ -631,6 +738,15 @@ async function main() {
                     break;
                 case '9': case 'stopd':
                     stopDamasGhost();
+                    break;
+                case 'x': case 'restart':
+                    console.log('\nReiniciando servidor...');
+                    const { execSync } = require('child_process');
+                    try {
+                        execSync('ssh root@217.154.107.144 "systemctl restart msx-server"', { timeout: 15000 });
+                        console.log('Servidor reiniciado.\n');
+                        disconnect();
+                    } catch(e) { console.log('Error: ' + e.message); }
                     break;
                 case '0': case 'q': case 'quit': case 'exit':
                     disconnect();
