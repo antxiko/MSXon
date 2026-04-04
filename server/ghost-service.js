@@ -307,11 +307,14 @@ function startDamasGhost() {
 
 // ── Ghost de Burdyn ───────────────────────────────────────────
 
-function startBurdynGhost() {
+function startBurdynGhost(idx) {
+    idx = idx || 0;
     const sock = new net.Socket();
     let roomId = 0, pid = 0;
     let recvBuf = Buffer.alloc(0);
-    let x = 5, y = 5, dx = 1, dy = 1;
+    let x = 3 + idx * 5, y = 3 + idx * 4;
+    let dx = (idx % 2 === 0) ? 1 : -1;
+    let dy = (idx % 3 === 0) ? -1 : 1;
     let interval = null;
     let pingCounter = 0;
     let gameStarted = false;
@@ -319,7 +322,7 @@ function startBurdynGhost() {
     function log(msg) {
         const d = new Date();
         const ts = d.toTimeString().substring(0, 8);
-        console.log(`[${ts}] [BURDYN] ${msg}`);
+        console.log(`[${ts}] [BURDYN#${idx}] ${msg}`);
     }
 
     sock.connect(SERVER_PORT, SERVER_IP, () => {
@@ -341,8 +344,24 @@ function startBurdynGhost() {
 
             if (cmd === CMD.AUTH_OK) {
                 log('Auth OK');
-                // Crear sala Burdyn AGGREGATE
-                sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x02])));
+                if (idx === 0) {
+                    // Primer ghost: crear sala
+                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x02])));
+                } else {
+                    // Siguientes: pedir lista y unirse a la primera sala Burdyn
+                    sock.write(buildPacket(0x26, 0, 0)); // ROOM_LIST
+                }
+            }
+            else if (cmd === 0x26 && payload.length > 0) {
+                // ROOM_LIST response — buscar sala Burdyn
+                const count = payload[0];
+                for (let i = 0; i < count; i++) {
+                    const off = 1 + i * 3;
+                    if (payload[off + 1] === 0x03) { // GAME_ID_CRAWLER
+                        sock.write(buildPacket(0x21, 0, 0, Buffer.from([payload[off]]))); // JOIN
+                        break;
+                    }
+                }
             }
             else if (cmd === CMD.ROOM_INFO) {
                 roomId = payload[0];
@@ -371,7 +390,7 @@ function startBurdynGhost() {
     sock.on('close', () => {
         log('Desconectado. Reconectando en 5s...');
         if (interval) clearInterval(interval);
-        setTimeout(startBurdynGhost, 5000);
+        setTimeout(() => startBurdynGhost(idx), 5000);
     });
 
     // Movimiento: rebote diagonal por el mapa 64x64
@@ -397,7 +416,13 @@ function startBurdynGhost() {
 
 // ── Arranque ──────────────────────────────────────────────────
 
+// Parametros: node ghost-service.js [num_burdyn_ghosts]
+const NUM_BURDYN = parseInt(process.argv[2] || '3', 10);
+
 console.log('MSX Online Ghost Service v1.0');
-console.log('Iniciando ghosts...\n');
+console.log(`Iniciando: 1 ghost damas + ${NUM_BURDYN} ghost(s) burdyn\n`);
 startDamasGhost();
-startBurdynGhost();
+for (let i = 0; i < NUM_BURDYN; i++) {
+    // Delay escalonado para que no se conecten todos a la vez
+    setTimeout(() => startBurdynGhost(i), i * 2000);
+}
