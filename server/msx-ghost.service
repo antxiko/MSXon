@@ -1,0 +1,16 @@
+[Unit]
+Description=MSX Online Ghost Service
+After=msx-server.service
+Requires=msx-server.service
+
+[Service]
+Type=simple
+User=nobody
+WorkingDirectory=/opt/msx-server
+ExecStart=/usr/bin/node /opt/msx-server/ghost-service.js
+Restart=always
+RestartSec=5
+MemoryMax=32M
+
+[Install]
+WantedBy=multi-user.target

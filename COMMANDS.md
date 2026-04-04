@@ -34,6 +34,23 @@ openmsx -machine Philips_NMS_8250 -ext msxdos2 -diska build/dsk/BURDYN.dsk
 openmsx -machine Philips_NMS_8250 -ext msxdos2 -diska build/dsk/BURDYN.dsk
 ```
 
+## Ghost Service (VPS)
+
+```bash
+# Desplegar ghost-service
+scp server/ghost-service.js server/msx-ghost.service root@217.154.107.144:/tmp/
+ssh root@217.154.107.144 "cp /tmp/ghost-service.js /opt/msx-server/ && cp /tmp/msx-ghost.service /etc/systemd/system/ && systemctl daemon-reload && systemctl enable --now msx-ghost"
+
+# Estado
+ssh root@217.154.107.144 "systemctl status msx-ghost"
+
+# Reiniciar
+ssh root@217.154.107.144 "systemctl restart msx-ghost"
+
+# Logs
+ssh root@217.154.107.144 "journalctl -u msx-ghost -f"
+```
+
 ## Git
 
 ```bash

@@ -392,16 +392,15 @@ function damasFindMoves(board, color) {
                 for (const sy of [-1, 1]) {
                     for (const sx of [-1, 1]) {
                         let foundEnemy = false;
-                        let ex = 0, ey = 0;
                         for (let i = 1; i < 8; i++) {
                             const cx = x + sx * i, cy = y + sy * i;
                             if (cx < 0 || cx >= 8 || cy < 0 || cy >= 8) break;
                             const cp = board[cy][cx];
                             if (cp === PIECE_NONE) {
-                                if (foundEnemy) captures.push({fx: x, fy: y, tx: cx, ty: cy});
-                                else moves.push({fx: x, fy: y, tx: cx, ty: cy});
+                                if (foundEnemy) captures.push({fx: x, fy: y, tx: cx, ty: cy, cap: true});
+                                else moves.push({fx: x, fy: y, tx: cx, ty: cy, cap: false});
                             } else if (isEnemy(p, cp) && !foundEnemy) {
-                                foundEnemy = true; ex = cx; ey = cy;
+                                foundEnemy = true;
                             } else break;
                         }
                     }
@@ -413,7 +412,7 @@ function damasFindMoves(board, color) {
                 for (const dx of [-1, 1]) {
                     const tx = x + dx, ty = y + fwd;
                     if (tx >= 0 && tx < 8 && ty >= 0 && ty < 8 && board[ty][tx] === PIECE_NONE)
-                        moves.push({fx: x, fy: y, tx, ty});
+                        moves.push({fx: x, fy: y, tx, ty, cap: false});
                 }
                 // Capturas (4 direcciones)
                 for (const dy of [-1, 1]) {
@@ -422,7 +421,7 @@ function damasFindMoves(board, color) {
                         const tx = x + dx * 2, ty = y + dy * 2;
                         if (tx >= 0 && tx < 8 && ty >= 0 && ty < 8 &&
                             board[ty][tx] === PIECE_NONE && isEnemy(p, board[my][mx]))
-                            captures.push({fx: x, fy: y, tx, ty});
+                            captures.push({fx: x, fy: y, tx, ty, cap: true});
                     }
                 }
             }
@@ -550,50 +549,13 @@ async function startDamasGhost() {
                         if (fx === tx && fy === ty) {
                             console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) IGNORADO`);
                         } else if (fx < 8 && fy < 8 && tx < 8 && ty < 8) {
-                            const wasCapture = Math.abs(tx - fx) >= 2;
+                            const endTurn = len >= 5 ? payload[4] : 1;
                             damasExecuteMove(board, fx, fy, tx, ty);
-
-                            // Comprobar multi-captura del oponente
-                            let opponentContinues = false;
-                            if (wasCapture) {
-                                const p = board[ty][tx];
-                                if (p !== PIECE_NONE) {
-                                    // Buscar capturas desde la posicion de destino
-                                    if (isKing(p)) {
-                                        for (const sy of [-1, 1]) {
-                                            for (const sx of [-1, 1]) {
-                                                let fe = false;
-                                                for (let ii = 1; ii < 8; ii++) {
-                                                    const cx = tx + sx * ii, cy = ty + sy * ii;
-                                                    if (cx < 0 || cx >= 8 || cy < 0 || cy >= 8) break;
-                                                    const cp = board[cy][cx];
-                                                    if (cp === PIECE_NONE) { if (fe) { opponentContinues = true; break; } }
-                                                    else if (isEnemy(p, cp) && !fe) { fe = true; }
-                                                    else break;
-                                                }
-                                                if (opponentContinues) break;
-                                            }
-                                            if (opponentContinues) break;
-                                        }
-                                    } else {
-                                        for (const dy of [-2, 2]) {
-                                            for (const dx of [-2, 2]) {
-                                                const ttx = tx + dx, tty = ty + dy;
-                                                const mx = tx + dx/2, my = ty + dy/2;
-                                                if (ttx >= 0 && ttx < 8 && tty >= 0 && tty < 8 &&
-                                                    board[tty][ttx] === PIECE_NONE && isEnemy(p, board[my][mx]))
-                                                    opponentContinues = true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (opponentContinues) {
-                                console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) CAP (multi, esperando...)`);
-                            } else {
+                            if (endTurn) {
                                 turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
-                                console.log(`  Oponente: (${fx},${fy})->(${tx},${ty})${wasCapture ? ' CAP' : ''} | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'}`);
+                                console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'}`);
+                            } else {
+                                console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) MULTI (esperando siguiente...)`);
                             }
                         }
                     }
@@ -618,13 +580,17 @@ async function startDamasGhost() {
         // Keepalive + jugadas
         let pingCounter = 0;
         let multiCapX = -1, multiCapY = -1; // Multi-captura en curso
+        let multiCapCount = 0; // Seguridad: max 12 capturas seguidas
 
         const interval = setInterval(() => {
             // Ping cada 10 ticks (~20s a 2s/tick)
             pingCounter++;
             if (pingCounter >= 10) {
                 pingCounter = 0;
-                if (!sock.destroyed) sock.write(buildPacket(0x01, roomId, pid));
+                if (!sock.destroyed) {
+                    sock.write(buildPacket(0x01, roomId, pid));
+                    console.log('  [PING]');
+                }
             }
 
             if (!gameStarted) return;
@@ -650,46 +616,75 @@ async function startDamasGhost() {
             }
 
             if (validMoves.length === 0) {
-                console.log('  Ghost sin movimientos. Tablero:');
-                for (let r = 0; r < 8; r++) {
-                    let row = '  ';
-                    for (let c = 0; c < 8; c++) {
-                        const p = board[r][c];
-                        row += p === 0 ? '.' : p === 1 ? 'w' : p === 2 ? 'b' : p === 3 ? 'W' : 'B';
-                    }
-                    console.log(row);
-                }
+                // Comprobar si tiene fichas
+                let myPieces = 0;
+                for (let r = 0; r < 8; r++)
+                    for (let c = 0; c < 8; c++)
+                        if ((myColor === PIECE_WHITE && isWhite(board[r][c])) ||
+                            (myColor === PIECE_BLACK && isBlack(board[r][c]))) myPieces++;
+
+                if (myPieces === 0)
+                    console.log('\n  *** GHOST HA PERDIDO — sin fichas ***');
+                else
+                    console.log('\n  *** GHOST HA PERDIDO — sin movimientos ***');
+
+                // Reiniciar tablero y esperar nuevo oponente
+                console.log('  Reiniciando tablero. Esperando nuevo rival...\n');
+                for (let r = 0; r < 8; r++)
+                    for (let c = 0; c < 8; c++)
+                        board[r][c] = PIECE_NONE;
+                for (let r = 0; r < 8; r++)
+                    for (let c = 0; c < 8; c++)
+                        if ((c + r) & 1) {
+                            if (r < 3) board[r][c] = PIECE_BLACK;
+                            else if (r > 4) board[r][c] = PIECE_WHITE;
+                        }
+                turn = PIECE_WHITE;
+                multiCapX = -1;
+                multiCapY = -1;
+                multiCapCount = 0;
+                gameStarted = false;
                 return;
             }
 
             // Elegir y ejecutar movimiento
+            const t0 = Date.now();
             const move = validMoves[Math.floor(Math.random() * validMoves.length)];
-            const isCapture = Math.abs(move.tx - move.fx) >= 2;
-
             damasExecuteMove(board, move.fx, move.fy, move.tx, move.ty);
 
-            // Enviar al servidor
-            const payload = Buffer.from([move.fx, move.fy, move.tx, move.ty, turn, 0, 0, 0]);
-            if (!sock.destroyed) sock.write(buildPacket(0x40, roomId, pid, payload));
+            let endTurnFlag = 1; // por defecto fin de turno
             moveCount++;
-            console.log(`  Ghost: (${move.fx},${move.fy})->(${move.tx},${move.ty})${isCapture ? ' CAPTURA' : ''} | #${moveCount}`);
+            const dt = Date.now() - t0;
+            console.log(`  Ghost: (${move.fx},${move.fy})->(${move.tx},${move.ty})${move.cap ? ' CAPTURA' : ''} | #${moveCount} (${dt}ms)`);
 
-            if (isCapture) {
-                // Comprobar si puede seguir capturando
-                const moreCaps = damasFindMoves(board, myColor).filter(
-                    m => m.fx === move.tx && m.fy === move.ty && Math.abs(m.tx - m.fx) >= 2
-                );
-                if (moreCaps.length > 0) {
-                    multiCapX = move.tx;
-                    multiCapY = move.ty;
-                    console.log('  Multi-captura posible, sigue...');
-                    return; // No cambiar turno, seguir en el proximo tick
+            if (move.cap) {
+                multiCapCount++;
+                if (multiCapCount <= 12) {
+                    const moreCaps = damasFindMoves(board, myColor).filter(
+                        m => m.fx === move.tx && m.fy === move.ty && m.cap === true
+                    );
+                    if (moreCaps.length > 0) {
+                        multiCapX = move.tx;
+                        multiCapY = move.ty;
+                        endTurnFlag = 0; // Multi-captura: no fin de turno
+                        console.log('  Multi-captura posible, sigue...');
+                    }
                 }
+            }
+
+            // Enviar movimiento con flag endTurn
+            const sendPayload = Buffer.from([move.fx, move.fy, move.tx, move.ty, endTurnFlag, 0, 0, 0]);
+            if (!sock.destroyed) sock.write(buildPacket(0x40, roomId, pid, sendPayload));
+
+            if (endTurnFlag === 0) {
+                // Multi-captura: no cambiar turno, seguir en proximo tick
+                return;
             }
 
             // Turno pasa al oponente
             multiCapX = -1;
             multiCapY = -1;
+            multiCapCount = 0;
             turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
             console.log(`  Turno: ${turn === PIECE_WHITE ? 'BLANCAS' : 'NEGRAS'}`);
 
@@ -742,6 +737,12 @@ function showMenu() {
     console.log('  8. Ghost Damas (IA basica)');
     console.log('  9. Parar ghost Damas');
     console.log('  x. Reiniciar servidor (limpia salas)');
+    console.log('');
+    console.log('  GHOST SERVICE (VPS)');
+    console.log('  gs. Estado ghost-service');
+    console.log('  gr. Reiniciar ghost-service');
+    console.log('  gl. Logs ghost-service');
+    console.log('');
     console.log('  0. Salir');
     console.log('═══════════════════════════════════════');
 }
@@ -783,11 +784,31 @@ async function main() {
                     break;
                 case 'x': case 'restart':
                     console.log('\nReiniciando servidor...');
-                    const { execSync } = require('child_process');
                     try {
-                        execSync('ssh root@217.154.107.144 "systemctl restart msx-server"', { timeout: 15000 });
+                        require('child_process').execSync('ssh root@217.154.107.144 "systemctl restart msx-server"', { timeout: 15000 });
                         console.log('Servidor reiniciado.\n');
                         disconnect();
+                    } catch(e) { console.log('Error: ' + e.message); }
+                    break;
+                case 'gs':
+                    console.log('\nEstado ghost-service:');
+                    try {
+                        const out = require('child_process').execSync('ssh root@217.154.107.144 "systemctl status msx-ghost 2>&1 | head -10"', { timeout: 15000 });
+                        console.log(out.toString());
+                    } catch(e) { console.log('No instalado o error: ' + e.message); }
+                    break;
+                case 'gr':
+                    console.log('\nReiniciando ghost-service...');
+                    try {
+                        require('child_process').execSync('ssh root@217.154.107.144 "systemctl restart msx-ghost"', { timeout: 15000 });
+                        console.log('Ghost-service reiniciado.\n');
+                    } catch(e) { console.log('Error: ' + e.message); }
+                    break;
+                case 'gl':
+                    console.log('\nLogs ghost-service (ultimas 20 lineas):');
+                    try {
+                        const out = require('child_process').execSync('ssh root@217.154.107.144 "journalctl -u msx-ghost --no-pager -n 20"', { timeout: 15000 });
+                        console.log(out.toString());
                     } catch(e) { console.log('Error: ' + e.message); }
                     break;
                 case '0': case 'q': case 'quit': case 'exit':

@@ -325,14 +325,45 @@ void Buf_PutTile(u8 col, u8 row, u8 tile)
 // TABLERO: INICIALIZAR
 //=============================================================================
 
+// Estado fin de partida
+#define GAME_RESULT_NONE    0
+#define GAME_RESULT_WIN     1
+#define GAME_RESULT_LOSE    2
+#define GAME_RESULT_DISC    3  // Rival desconectado
+static u8 g_GameResult = GAME_RESULT_NONE;
+
 // Helpers de piezas
 bool IsWhite(u8 p) { return (p == PIECE_WHITE || p == PIECE_WHITE_KING); }
 bool IsBlack(u8 p) { return (p == PIECE_BLACK || p == PIECE_BLACK_KING); }
 bool IsKing(u8 p) { return (p == PIECE_WHITE_KING || p == PIECE_BLACK_KING); }
 bool IsEnemy(u8 a, u8 b) { return (IsWhite(a) && IsBlack(b)) || (IsBlack(a) && IsWhite(b)); }
 
+void CheckGameOver(void)
+{
+    u8 x, y, whites, blacks;
+    whites = 0;
+    blacks = 0;
+    for(y = 0; y < BOARD_SIZE; y++)
+        for(x = 0; x < BOARD_SIZE; x++)
+        {
+            if(IsWhite(g_Board[y][x])) whites++;
+            if(IsBlack(g_Board[y][x])) blacks++;
+        }
+
+    if(g_MyColor == 0) return; // Offline, no comprobar
+
+    if(whites == 0)
+    {
+        g_GameResult = (g_MyColor == PIECE_BLACK) ? GAME_RESULT_WIN : GAME_RESULT_LOSE;
+    }
+    else if(blacks == 0)
+    {
+        g_GameResult = (g_MyColor == PIECE_WHITE) ? GAME_RESULT_WIN : GAME_RESULT_LOSE;
+    }
+}
+
 // Forward declarations
-void Net_SendMove(u8 fromX, u8 fromY, u8 toX, u8 toY);
+void Net_SendMove(u8 fromX, u8 fromY, u8 toX, u8 toY, u8 endTurn);
 void Lobby_Draw(void);
 
 void Board_Init(void)
@@ -744,7 +775,12 @@ void Game_ProcessInput(void)
                 fX = g_SelX;
                 fY = g_SelY;
                 Move_Execute(fX, fY, g_CursorX, g_CursorY);
-                Net_SendMove(fX, fY, g_CursorX, g_CursorY);
+                // endTurn=1 si no hay multi-captura, 0 si sigue
+                Net_SendMove(fX, fY, g_CursorX, g_CursorY, g_MustCapture ? 0 : 1);
+                Log_WriteHex("[TX] fX=", fX);
+                Log_WriteHex("[TX] tX=", g_CursorX);
+                Log_WriteHex("[TX] end=", g_MustCapture ? 0 : 1);
+                CheckGameOver();
                 // Solo deseleccionar si NO hay multi-captura
                 if(!g_MustCapture)
                     g_Selected = 0;
@@ -1010,7 +1046,8 @@ void Net_JoinRoom(u8 roomId)
     Net_Send(g_Conn, g_SendBuf, 7);
 }
 
-void Net_SendMove(u8 fromX, u8 fromY, u8 toX, u8 toY)
+// endTurn: 0 = multi-captura pendiente (no cambiar turno), 1 = fin de turno
+void Net_SendMove(u8 fromX, u8 fromY, u8 toX, u8 toY, u8 endTurn)
 {
     if(g_Conn == NET_INVALID_CONN) return;
     g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
@@ -1018,7 +1055,7 @@ void Net_SendMove(u8 fromX, u8 fromY, u8 toX, u8 toY)
     g_SendBuf[5] = 8;
     g_SendBuf[6] = fromX; g_SendBuf[7] = fromY;
     g_SendBuf[8] = toX; g_SendBuf[9] = toY;
-    g_SendBuf[10] = g_Turn; g_SendBuf[11] = 0; g_SendBuf[12] = 0; g_SendBuf[13] = 0;
+    g_SendBuf[10] = endTurn; g_SendBuf[11] = 0; g_SendBuf[12] = 0; g_SendBuf[13] = 0;
     Net_Send(g_Conn, g_SendBuf, 14);
 }
 
@@ -1089,6 +1126,13 @@ void Net_ProcessPacket(u8 cmd, u8* payload, u8 len)
             g_BoardDirty = TRUE;
         }
     }
+    else if(cmd == CMD_PLAYER_LEFT)
+    {
+        if(g_GameState == STATE_PLAYING || g_GameState == STATE_WAITING)
+        {
+            g_GameResult = GAME_RESULT_DISC;
+        }
+    }
     else if(cmd == CMD_STATE_UPDATE && len >= 4)
     {
         // Movimiento del oponente — ejecutar sin validar
@@ -1097,10 +1141,42 @@ void Net_ProcessPacket(u8 cmd, u8* payload, u8 len)
         u8 fromY = payload[1];
         u8 toX = payload[2];
         u8 toY = payload[3];
-        if(fromX != toX || fromY != toY) // Ignorar movimientos nulos
+        if(fromX != toX || fromY != toY)
         {
-            Move_Execute(fromX, fromY, toX, toY);
+            u8 endTurn = payload[4];
+            // Ejecutar movimiento del oponente sin cambiar turno
+            // (Move_Execute cambia turno internamente, pero debemos respetar endTurn)
+            g_Board[toY][toX] = g_Board[fromY][fromX];
+            g_Board[fromY][fromX] = PIECE_NONE;
+            // Quitar pieza capturada si hay
+            {
+                i8 dx = (i8)toX - (i8)fromX;
+                i8 dy = (i8)toY - (i8)fromY;
+                i8 sx = (dx > 0) ? 1 : -1;
+                i8 sy = (dy > 0) ? 1 : -1;
+                i8 dist = (dx > 0) ? dx : -dx;
+                i8 ii;
+                for(ii = 1; ii < dist; ii++)
+                {
+                    u8 cx = fromX + sx * ii;
+                    u8 cy = fromY + sy * ii;
+                    if(g_Board[cy][cx] != PIECE_NONE)
+                    {
+                        g_Board[cy][cx] = PIECE_NONE;
+                        break;
+                    }
+                }
+            }
+            // Promocion
+            if(g_Board[toY][toX] == PIECE_WHITE && toY == 0)
+                g_Board[toY][toX] = PIECE_WHITE_KING;
+            if(g_Board[toY][toX] == PIECE_BLACK && toY == BOARD_SIZE - 1)
+                g_Board[toY][toX] = PIECE_BLACK_KING;
+            // Solo cambiar turno si endTurn == 1
+            if(endTurn)
+                g_Turn = (g_Turn == PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
             g_BoardDirty = TRUE;
+            CheckGameOver();
         }
     }
 }
@@ -1328,6 +1404,56 @@ void main(void)
 
             Pieces_Draw();
             Cursor_Draw();
+
+            // Comprobar fin de partida
+            if(g_GameResult != GAME_RESULT_NONE)
+            {
+                u16 idx;
+                u8 w;
+
+                // Mostrar resultado sobre el tablero
+                for(idx = 0; idx < 768; idx++) g_NameBuf[idx] = TILE_SPC;
+                if(g_GameResult == GAME_RESULT_WIN)
+                    Buf_PutText(8, 10, "HAS GANADO");
+                else if(g_GameResult == GAME_RESULT_LOSE)
+                    Buf_PutText(8, 10, "HAS PERDIDO");
+                else
+                    Buf_PutText(5, 10, "RIVAL DESCONECTADO");
+
+                Buf_PutText(5, 14, "PULSA ESPACIO");
+                g_FullFlush = TRUE;
+
+                // Esperar tecla
+                for(w = 0; w < 32; w++) VDP_SetSpriteExUniColor(w, 0, 209, 0, 0);
+                while(!Keyboard_IsKeyPressed(KEY_SPACE) && !Keyboard_IsKeyPressed(KEY_RET))
+                {
+                    Halt();
+                    Keyboard_Update();
+                    *((u16*)0xF3F8) = *((u16*)0xF3FA);
+                    if(g_FullFlush) { VDP_WriteVRAM(g_NameBuf, 0x1800, 0, 768); g_FullFlush = FALSE; }
+                }
+
+                // Salir de la sala
+                if(g_Conn != NET_INVALID_CONN)
+                {
+                    g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
+                    g_SendBuf[2] = CMD_ROOM_LEAVE; g_SendBuf[3] = g_RoomId;
+                    g_SendBuf[4] = g_MyPid; g_SendBuf[5] = 0;
+                    Net_Send(g_Conn, g_SendBuf, 6);
+                }
+                g_RoomId = 0;
+                g_MyPid = 0;
+                g_MyColor = 0;
+
+                // Reiniciar para volver al lobby
+                g_GameResult = GAME_RESULT_NONE;
+                g_MustCapture = 0;
+                g_Selected = 0;
+                g_Turn = PIECE_WHITE;
+                Board_Init();
+                g_GameState = STATE_LOBBY_WAIT;
+                Net_RequestRoomList();
+            }
         }
     }
 
