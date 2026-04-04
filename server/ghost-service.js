@@ -305,8 +305,99 @@ function startDamasGhost() {
     }, 1500);
 }
 
+// ── Ghost de Burdyn ───────────────────────────────────────────
+
+function startBurdynGhost() {
+    const sock = new net.Socket();
+    let roomId = 0, pid = 0;
+    let recvBuf = Buffer.alloc(0);
+    let x = 5, y = 5, dx = 1, dy = 1;
+    let interval = null;
+    let pingCounter = 0;
+    let gameStarted = false;
+
+    function log(msg) {
+        const d = new Date();
+        const ts = d.toTimeString().substring(0, 8);
+        console.log(`[${ts}] [BURDYN] ${msg}`);
+    }
+
+    sock.connect(SERVER_PORT, SERVER_IP, () => {
+        log('Conectado al servidor');
+        sock.write(buildPacket(CMD.AUTH, 0, 0, AUTH_TOKEN));
+    });
+
+    sock.on('data', (chunk) => {
+        recvBuf = Buffer.concat([recvBuf, chunk]);
+        while (recvBuf.length >= 6) {
+            const idx = recvBuf.indexOf(Buffer.from([0x46, 0x4D]));
+            if (idx < 0) { recvBuf = Buffer.alloc(0); break; }
+            if (idx > 0) { recvBuf = recvBuf.subarray(idx); continue; }
+            const len = recvBuf[5];
+            if (recvBuf.length < 6 + len) break;
+            const cmd = recvBuf[2];
+            const payload = Buffer.from(recvBuf.subarray(6, 6 + len));
+            recvBuf = recvBuf.subarray(6 + len);
+
+            if (cmd === CMD.AUTH_OK) {
+                log('Auth OK');
+                // Crear sala Burdyn AGGREGATE
+                sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x02])));
+            }
+            else if (cmd === CMD.ROOM_INFO) {
+                roomId = payload[0];
+                pid = payload[3];
+                log(`Sala 0x${roomId.toString(16).padStart(2, '0')} | PID=${pid}`);
+                // Enviar GAME_START para activar tick AGGREGATE
+                if (pid === 1) {
+                    sock.write(buildPacket(0x32, roomId, pid));
+                    log('GAME_START enviado');
+                }
+                gameStarted = true;
+            }
+            else if (cmd === CMD.PLAYER_JOINED) {
+                log('Jugador conectado!');
+            }
+            else if (cmd === CMD.PLAYER_LEFT) {
+                log('Jugador desconectado.');
+            }
+        }
+    });
+
+    sock.on('error', (err) => {
+        if (err.code !== 'ECONNRESET') log(`Error: ${err.message}`);
+    });
+
+    sock.on('close', () => {
+        log('Desconectado. Reconectando en 5s...');
+        if (interval) clearInterval(interval);
+        setTimeout(startBurdynGhost, 5000);
+    });
+
+    // Movimiento: rebote diagonal por el mapa 64x64
+    interval = setInterval(() => {
+        pingCounter++;
+        if (pingCounter >= 10) {
+            pingCounter = 0;
+            if (!sock.destroyed) sock.write(buildPacket(CMD.PING, roomId, pid));
+        }
+
+        if (!gameStarted) return;
+
+        x += dx; y += dy;
+        if (x <= 1 || x >= 62) dx = -dx;
+        if (y <= 1 || y >= 62) dy = -dy;
+        if (x < 1) x = 1; if (x > 62) x = 62;
+        if (y < 1) y = 1; if (y > 62) y = 62;
+
+        const pl = Buffer.from([x, y, 0, 100, 0, 0, 1, 0]);
+        if (!sock.destroyed) sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, pl));
+    }, 250); // 4 FPS
+}
+
 // ── Arranque ──────────────────────────────────────────────────
 
 console.log('MSX Online Ghost Service v1.0');
-console.log('Iniciando ghost de damas...\n');
+console.log('Iniciando ghosts...\n');
 startDamasGhost();
+startBurdynGhost();
