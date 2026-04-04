@@ -550,9 +550,51 @@ async function startDamasGhost() {
                         if (fx === tx && fy === ty) {
                             console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) IGNORADO`);
                         } else if (fx < 8 && fy < 8 && tx < 8 && ty < 8) {
+                            const wasCapture = Math.abs(tx - fx) >= 2;
                             damasExecuteMove(board, fx, fy, tx, ty);
-                            turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
-                            console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'}`);
+
+                            // Comprobar multi-captura del oponente
+                            let opponentContinues = false;
+                            if (wasCapture) {
+                                const p = board[ty][tx];
+                                if (p !== PIECE_NONE) {
+                                    // Buscar capturas desde la posicion de destino
+                                    if (isKing(p)) {
+                                        for (const sy of [-1, 1]) {
+                                            for (const sx of [-1, 1]) {
+                                                let fe = false;
+                                                for (let ii = 1; ii < 8; ii++) {
+                                                    const cx = tx + sx * ii, cy = ty + sy * ii;
+                                                    if (cx < 0 || cx >= 8 || cy < 0 || cy >= 8) break;
+                                                    const cp = board[cy][cx];
+                                                    if (cp === PIECE_NONE) { if (fe) { opponentContinues = true; break; } }
+                                                    else if (isEnemy(p, cp) && !fe) { fe = true; }
+                                                    else break;
+                                                }
+                                                if (opponentContinues) break;
+                                            }
+                                            if (opponentContinues) break;
+                                        }
+                                    } else {
+                                        for (const dy of [-2, 2]) {
+                                            for (const dx of [-2, 2]) {
+                                                const ttx = tx + dx, tty = ty + dy;
+                                                const mx = tx + dx/2, my = ty + dy/2;
+                                                if (ttx >= 0 && ttx < 8 && tty >= 0 && tty < 8 &&
+                                                    board[tty][ttx] === PIECE_NONE && isEnemy(p, board[my][mx]))
+                                                    opponentContinues = true;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (opponentContinues) {
+                                console.log(`  Oponente: (${fx},${fy})->(${tx},${ty}) CAP (multi, esperando...)`);
+                            } else {
+                                turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
+                                console.log(`  Oponente: (${fx},${fy})->(${tx},${ty})${wasCapture ? ' CAP' : ''} | Turno: ${turn === PIECE_WHITE ? 'B' : 'N'}`);
+                            }
                         }
                     }
                     else if (cmd === 0x30) {
@@ -578,9 +620,9 @@ async function startDamasGhost() {
         let multiCapX = -1, multiCapY = -1; // Multi-captura en curso
 
         const interval = setInterval(() => {
-            // Ping cada 30 ticks (~60s a 2s/tick)
+            // Ping cada 10 ticks (~20s a 2s/tick)
             pingCounter++;
-            if (pingCounter >= 30) {
+            if (pingCounter >= 10) {
                 pingCounter = 0;
                 if (!sock.destroyed) sock.write(buildPacket(0x01, roomId, pid));
             }
@@ -651,7 +693,7 @@ async function startDamasGhost() {
             turn = (turn === PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
             console.log(`  Turno: ${turn === PIECE_WHITE ? 'BLANCAS' : 'NEGRAS'}`);
 
-        }, 2000);
+        }, 1500);
 
         damasGhost = { socket: sock, interval, board, roomId, pid, myColor };
 

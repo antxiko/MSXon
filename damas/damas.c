@@ -665,6 +665,8 @@ void Move_Execute(u8 fromX, u8 fromY, u8 toX, u8 toY)
 
 void Game_ProcessInput(void)
 {
+    u8 fX, fY; // Para guardar from antes de Move_Execute
+
     if(g_MoveDelay > 0) { g_MoveDelay--; return; }
 
     if(Keyboard_IsKeyPressed(KEY_UP))
@@ -739,9 +741,13 @@ void Game_ProcessInput(void)
             }
             else if(Move_IsValid(g_SelX, g_SelY, g_CursorX, g_CursorY))
             {
-                Move_Execute(g_SelX, g_SelY, g_CursorX, g_CursorY);
-                Net_SendMove(g_SelX, g_SelY, g_CursorX, g_CursorY);
-                g_Selected = 0;
+                fX = g_SelX;
+                fY = g_SelY;
+                Move_Execute(fX, fY, g_CursorX, g_CursorY);
+                Net_SendMove(fX, fY, g_CursorX, g_CursorY);
+                // Solo deseleccionar si NO hay multi-captura
+                if(!g_MustCapture)
+                    g_Selected = 0;
             }
             else
             {
@@ -1085,14 +1091,16 @@ void Net_ProcessPacket(u8 cmd, u8* payload, u8 len)
     }
     else if(cmd == CMD_STATE_UPDATE && len >= 4)
     {
-        // Movimiento del oponente
+        // Movimiento del oponente — ejecutar sin validar
+        // (el servidor ya lo validó al reenviarlo)
         u8 fromX = payload[0];
         u8 fromY = payload[1];
         u8 toX = payload[2];
         u8 toY = payload[3];
-        if(Move_IsValid(fromX, fromY, toX, toY))
+        if(fromX != toX || fromY != toY) // Ignorar movimientos nulos
         {
             Move_Execute(fromX, fromY, toX, toY);
+            g_BoardDirty = TRUE;
         }
     }
 }
