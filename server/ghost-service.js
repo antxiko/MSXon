@@ -307,6 +307,8 @@ function startDamasGhost() {
 
 // ── Ghost de Burdyn ───────────────────────────────────────────
 
+let burdynRoomId = 0; // Compartido entre todos los ghosts Burdyn
+
 function startBurdynGhost(idx) {
     idx = idx || 0;
     const sock = new net.Socket();
@@ -347,25 +349,24 @@ function startBurdynGhost(idx) {
                 if (idx === 0) {
                     // Primer ghost: crear sala
                     sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x02])));
+                } else if (burdynRoomId > 0) {
+                    // Unirse a la sala del primer ghost
+                    log(`Uniendose a sala 0x${burdynRoomId.toString(16).padStart(2, '0')}`);
+                    sock.write(buildPacket(0x21, 0, 0, Buffer.from([burdynRoomId])));
                 } else {
-                    // Siguientes: pedir lista y unirse a la primera sala Burdyn
-                    sock.write(buildPacket(0x26, 0, 0)); // ROOM_LIST
-                }
-            }
-            else if (cmd === 0x26 && payload.length > 0) {
-                // ROOM_LIST response — buscar sala Burdyn
-                const count = payload[0];
-                for (let i = 0; i < count; i++) {
-                    const off = 1 + i * 3;
-                    if (payload[off + 1] === 0x03) { // GAME_ID_CRAWLER
-                        sock.write(buildPacket(0x21, 0, 0, Buffer.from([payload[off]]))); // JOIN
-                        break;
-                    }
+                    // Sala aun no creada, esperar y reintentar
+                    log('Sala aun no creada, reintentando en 3s...');
+                    setTimeout(() => {
+                        if (burdynRoomId > 0) {
+                            sock.write(buildPacket(0x21, 0, 0, Buffer.from([burdynRoomId])));
+                        }
+                    }, 3000);
                 }
             }
             else if (cmd === CMD.ROOM_INFO) {
                 roomId = payload[0];
                 pid = payload[3];
+                burdynRoomId = roomId; // Compartir con otros ghosts
                 log(`Sala 0x${roomId.toString(16).padStart(2, '0')} | PID=${pid}`);
                 // Enviar GAME_START para activar tick AGGREGATE
                 if (pid === 1) {
