@@ -338,6 +338,68 @@ bool IsBlack(u8 p) { return (p == PIECE_BLACK || p == PIECE_BLACK_KING); }
 bool IsKing(u8 p) { return (p == PIECE_WHITE_KING || p == PIECE_BLACK_KING); }
 bool IsEnemy(u8 a, u8 b) { return (IsWhite(a) && IsBlack(b)) || (IsBlack(a) && IsWhite(b)); }
 
+bool HasValidMoves(u8 color)
+{
+    u8 x, y;
+    for(y = 0; y < BOARD_SIZE; y++)
+    {
+        for(x = 0; x < BOARD_SIZE; x++)
+        {
+            u8 p = g_Board[y][x];
+            if(p == PIECE_NONE) continue;
+            if(color == PIECE_WHITE && !IsWhite(p)) continue;
+            if(color == PIECE_BLACK && !IsBlack(p)) continue;
+
+            // Comprobar si esta pieza puede mover a alguna casilla
+            {
+                i8 dx, dy;
+                if(IsKing(p))
+                {
+                    // Dama: 4 diagonales
+                    for(dy = -1; dy <= 1; dy += 2)
+                        for(dx = -1; dx <= 1; dx += 2)
+                        {
+                            u8 tx = x + dx;
+                            u8 ty = y + dy;
+                            if(tx < BOARD_SIZE && ty < BOARD_SIZE && g_Board[ty][tx] == PIECE_NONE)
+                                return TRUE;
+                            // Captura
+                            tx = x + dx * 2;
+                            ty = y + dy * 2;
+                            if(tx < BOARD_SIZE && ty < BOARD_SIZE &&
+                               g_Board[ty][tx] == PIECE_NONE &&
+                               IsEnemy(p, g_Board[y+dy][x+dx]))
+                                return TRUE;
+                        }
+                }
+                else
+                {
+                    i8 fwd = (color == PIECE_WHITE) ? -1 : 1;
+                    for(dx = -1; dx <= 1; dx += 2)
+                    {
+                        u8 tx = x + dx;
+                        u8 ty = y + fwd;
+                        if(tx < BOARD_SIZE && ty < BOARD_SIZE && g_Board[ty][tx] == PIECE_NONE)
+                            return TRUE;
+                    }
+                    // Capturas en 4 direcciones
+                    for(dy = -1; dy <= 1; dy += 2)
+                        for(dx = -1; dx <= 1; dx += 2)
+                        {
+                            u8 tx = x + dx * 2;
+                            u8 ty = y + dy * 2;
+                            if(tx < BOARD_SIZE && ty < BOARD_SIZE &&
+                               g_Board[ty][tx] == PIECE_NONE &&
+                               IsEnemy(p, g_Board[y+dy][x+dx]))
+                                return TRUE;
+                        }
+                }
+            }
+        }
+    }
+    return FALSE;
+}
+
 void CheckGameOver(void)
 {
     u8 x, y, whites, blacks;
@@ -350,16 +412,18 @@ void CheckGameOver(void)
             if(IsBlack(g_Board[y][x])) blacks++;
         }
 
-    if(g_MyColor == 0) return; // Offline, no comprobar
+    if(g_MyColor == 0) return;
 
+    // Sin fichas
     if(whites == 0)
-    {
         g_GameResult = (g_MyColor == PIECE_BLACK) ? GAME_RESULT_WIN : GAME_RESULT_LOSE;
-    }
     else if(blacks == 0)
-    {
         g_GameResult = (g_MyColor == PIECE_WHITE) ? GAME_RESULT_WIN : GAME_RESULT_LOSE;
-    }
+    // Sin movimientos (solo comprobar en mi turno)
+    else if(g_Turn == g_MyColor && !HasValidMoves(g_MyColor))
+        g_GameResult = GAME_RESULT_LOSE;
+    else if(g_Turn != g_MyColor && !HasValidMoves(g_Turn))
+        g_GameResult = GAME_RESULT_WIN;
 }
 
 // Forward declarations
