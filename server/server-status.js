@@ -33,6 +33,9 @@ const GAME_NAMES = {
     0x01: 'Prueba (sprites)',
     0x02: 'Damas',
     0x03: 'Burdyn',
+    0x04: 'Parchis',
+    0x05: 'Texas',
+    0x06: 'Tetris',
 };
 
 let socket = null;

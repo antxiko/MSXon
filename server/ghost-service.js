@@ -408,18 +408,341 @@ function startBurdynGhost(ghostNum) {
     }, 250); // 4 FPS
 }
 
+// =============================================================================
+// TETRIS GHOST — 3 bots jugando tetris en una sala
+// =============================================================================
+
+const GAME_ID_TETRIS = 0x06;
+const TET_BW = 8, TET_BH = 20, TET_NUM_PIECES = 7;
+const ACT_MOVE = 0, ACT_LOCK = 1, ACT_DEAD = 3;
+
+// Piece data (same as client)
+const TET_PIECES = [
+    // I
+    {n:2, r:[{w:4,h:1,b:0xF000},{w:1,h:4,b:0x8888}]},
+    // O
+    {n:1, r:[{w:2,h:2,b:0xCC00}]},
+    // T
+    {n:4, r:[{w:3,h:2,b:0x4E00},{w:2,h:3,b:0x8C80},{w:3,h:2,b:0xE400},{w:2,h:3,b:0x4C40}]},
+    // S
+    {n:2, r:[{w:3,h:2,b:0x6C00},{w:2,h:3,b:0x8C40}]},
+    // Z
+    {n:2, r:[{w:3,h:2,b:0xC600},{w:2,h:3,b:0x4C80}]},
+    // L
+    {n:4, r:[{w:2,h:3,b:0x88C0},{w:3,h:2,b:0xE800},{w:2,h:3,b:0xC440},{w:3,h:2,b:0x2E00}]},
+    // J
+    {n:4, r:[{w:2,h:3,b:0x44C0},{w:3,h:2,b:0x8E00},{w:2,h:3,b:0xC880},{w:3,h:2,b:0xE200}]},
+];
+
+function tetBit(bits, row, col) {
+    const mask = [
+        [0x8000,0x4000,0x2000,0x1000],
+        [0x0800,0x0400,0x0200,0x0100],
+        [0x0080,0x0040,0x0020,0x0010],
+        [0x0008,0x0004,0x0002,0x0001],
+    ];
+    return (bits & mask[row][col]) ? 1 : 0;
+}
+
+function tetGetRot(pi, rot) {
+    return TET_PIECES[pi].r[rot % TET_PIECES[pi].n];
+}
+
+function tetValid(board, pi, rot, px, py) {
+    const s = tetGetRot(pi, rot);
+    for (let r = 0; r < s.h; r++)
+        for (let c = 0; c < s.w; c++)
+            if (tetBit(s.b, r, c)) {
+                const nx = px + c, ny = py + r;
+                if (nx < 0 || nx >= TET_BW || ny >= TET_BH) return false;
+                if (ny >= 0 && board[ny][nx]) return false;
+            }
+    return true;
+}
+
+function tetEval(board, pi, rot, px, py) {
+    // Drop piece to bottom
+    let dy = py;
+    while (tetValid(board, pi, rot, px, dy + 1)) dy++;
+    // Place on tmp board
+    const tmp = board.map(r => [...r]);
+    const s = tetGetRot(pi, rot);
+    for (let r = 0; r < s.h; r++)
+        for (let c = 0; c < s.w; c++)
+            if (tetBit(s.b, r, c)) {
+                const by = dy + r, bx = px + c;
+                if (by >= 0 && by < TET_BH && bx >= 0 && bx < TET_BW) tmp[by][bx] = 1;
+            }
+    // Score: lines*200 - holes*150 - bumpiness*20 - maxHeight*10
+    let lines = 0, holes = 0, bump = 0, maxH = 0;
+    const heights = new Array(TET_BW).fill(0);
+    for (let c = 0; c < TET_BW; c++) {
+        let found = false;
+        for (let r = 0; r < TET_BH; r++) {
+            if (tmp[r][c]) {
+                if (!found) { heights[c] = TET_BH - r; found = true; }
+                if (TET_BH - r > maxH) maxH = TET_BH - r;
+            } else if (found) holes++;
+        }
+    }
+    for (let r = 0; r < TET_BH; r++) {
+        let full = true;
+        for (let c = 0; c < TET_BW; c++) if (!tmp[r][c]) { full = false; break; }
+        if (full) lines++;
+    }
+    for (let c = 0; c < TET_BW - 1; c++) bump += Math.abs(heights[c] - heights[c + 1]);
+    return { score: lines * 200 - holes * 150 - bump * 20 - maxH * 10, x: px, rot, y: dy };
+}
+
+let tetrisRoomId = 0;
+
+function startTetrisGhost(ghostNum) {
+    const log = (msg) => console.log(`[TETRIS#${ghostNum}] ${msg}`);
+    const sock = new net.Socket();
+    let recvBuf = Buffer.alloc(0);
+    let roomId = 0, pid = 0, gameStarted = false;
+    let interval = null, pingCounter = 0;
+
+    // Board + piece state
+    const board = Array.from({length: TET_BH}, () => new Array(TET_BW).fill(0));
+    let pi = Math.floor(Math.random() * TET_NUM_PIECES);
+    let nxt = Math.floor(Math.random() * TET_NUM_PIECES);
+    let rot = 0, px = 3, py = 0;
+    let dead = false;
+
+    function spawn() {
+        pi = nxt;
+        nxt = Math.floor(Math.random() * TET_NUM_PIECES);
+        rot = 0; px = 3; py = 0;
+        if (!tetValid(board, pi, rot, px, py)) {
+            dead = true;
+            // dead state will be sent via sync
+        }
+    }
+
+    function lockPiece() {
+        const s = tetGetRot(pi, rot);
+        for (let r = 0; r < s.h; r++)
+            for (let c = 0; c < s.w; c++)
+                if (tetBit(s.b, r, c)) {
+                    const by = py + r, bx = px + c;
+                    if (by >= 0 && by < TET_BH && bx >= 0 && bx < TET_BW) board[by][bx] = pid;
+                }
+        // Find full lines
+        let linesCleared = 0;
+        for (let r = TET_BH - 1; r >= 0; r--) {
+            let full = true;
+            for (let c = 0; c < TET_BW; c++) if (!board[r][c]) { full = false; break; }
+            if (full) {
+                linesCleared++;
+                for (let r2 = r; r2 > 0; r2--)
+                    for (let c = 0; c < TET_BW; c++) board[r2][c] = board[r2-1][c];
+                for (let c = 0; c < TET_BW; c++) board[0][c] = 0;
+                r++; // recheck this row
+            }
+        }
+        const garbT = [0, 0, 1, 2, 4];
+        const garb = garbT[Math.min(linesCleared, 4)];
+
+        spawn();
+        // Sync will be sent on next aiTick
+    }
+
+    let aiTargetX = 3, aiTargetRot = 0, aiComputed = false;
+
+    function aiCompute() {
+        // Find best position
+        let best = { score: -99999, x: px, rot: 0 };
+        const numRots = TET_PIECES[pi].n;
+        for (let ri = 0; ri < numRots; ri++) {
+            for (let xi = -1; xi < TET_BW; xi++) {
+                if (!tetValid(board, pi, ri, xi, py)) continue;
+                const ev = tetEval(board, pi, ri, xi, py);
+                if (ev.score > best.score) best = { score: ev.score, x: xi, rot: ri };
+            }
+        }
+        aiTargetX = best.x;
+        aiTargetRot = best.rot;
+        aiComputed = true;
+    }
+
+    function aiTick() {
+        if (dead || !gameStarted) return;
+
+        if (!aiComputed) aiCompute();
+
+        // Rotate + move X instantly (all in one tick)
+        if (rot !== aiTargetRot) {
+            const nr = aiTargetRot;
+            if (tetValid(board, pi, nr, px, py)) rot = nr;
+            else aiTargetRot = rot;
+        }
+        while (px < aiTargetX && tetValid(board, pi, rot, px + 1, py)) px++;
+        while (px > aiTargetX && tetValid(board, pi, rot, px - 1, py)) px--;
+
+        // Drop 2 rows per tick (faster play)
+        let dropped = 0;
+        while (dropped < 2 && tetValid(board, pi, rot, px, py + 1)) {
+            py++;
+            dropped++;
+        }
+
+        // At bottom: lock
+        if (!tetValid(board, pi, rot, px, py + 1)) {
+            lockPiece();
+            aiComputed = false;
+        }
+
+        // Send full board sync
+        sendSync();
+    }
+
+    function sendSync() {
+        if (sock.destroyed) return;
+        const payload = Buffer.alloc(85);
+        payload[0] = pi;
+        payload[1] = rot;
+        payload[2] = px & 0xFF;
+        payload[3] = py & 0xFF;
+        payload[4] = dead ? 1 : 0;
+        // Pack board: 2 cells per byte
+        let idx = 5;
+        for (let r = 0; r < TET_BH; r++) {
+            for (let c = 0; c < TET_BW; c += 2) {
+                payload[idx] = ((board[r][c] & 0x0F) << 4) | (board[r][c+1] & 0x0F);
+                idx++;
+            }
+        }
+        sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, payload));
+    }
+
+    sock.connect(SERVER_PORT, SERVER_IP, () => {
+        log('Conectado');
+        sock.write(buildPacket(CMD.AUTH, 0, 0, AUTH_TOKEN));
+    });
+
+    sock.on('data', (chunk) => {
+        recvBuf = Buffer.concat([recvBuf, chunk]);
+
+        while (recvBuf.length >= 6) {
+            let magicPos = -1;
+            for (let i = 0; i <= recvBuf.length - 2; i++) {
+                if (recvBuf[i] === 0x46 && recvBuf[i+1] === 0x4D) { magicPos = i; break; }
+            }
+            if (magicPos < 0) { recvBuf = Buffer.alloc(0); break; }
+            if (magicPos > 0) recvBuf = recvBuf.slice(magicPos);
+            if (recvBuf.length < 6) break;
+
+            const cmd = recvBuf[2];
+            const payloadLen = recvBuf[5];
+            const totalLen = 6 + payloadLen;
+            if (recvBuf.length < totalLen) break;
+
+            const payload = recvBuf.slice(6, totalLen);
+            recvBuf = recvBuf.slice(totalLen);
+
+            if (cmd === CMD.AUTH_OK) {
+                log('Auth OK');
+                if (ghostNum === 0) {
+                    // Create room
+                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0,
+                        Buffer.from([GAME_ID_TETRIS, 4, 0x01])));
+                } else {
+                    // Join existing room
+                    if (tetrisRoomId > 0) {
+                        sock.write(buildPacket(0x21, 0, 0, Buffer.from([tetrisRoomId])));
+                    }
+                }
+            }
+            else if (cmd === CMD.ROOM_INFO) {
+                roomId = payload[0];
+                pid = payload[3];
+                if (ghostNum === 0) tetrisRoomId = roomId;
+                log(`Sala ${roomId}, PID ${pid}`);
+            }
+            else if (cmd === CMD.PLAYER_JOINED) {
+                const joinedPid = payload[0];
+                log(`Player joined PID ${joinedPid}`);
+                // Ghost #0: when 4th player joins (sala completa), wait 3s and start
+                if (ghostNum === 0 && joinedPid === 4 && !gameStarted) {
+                    log('Sala completa! Empezando en 3s...');
+                    setTimeout(() => {
+                        if (!sock.destroyed && !gameStarted) {
+                            sock.write(buildPacket(0x32, roomId, pid));
+                            gameStarted = true;
+                            log('GAME_START enviado');
+                        }
+                    }, 3000);
+                }
+            }
+            else if (cmd === 0x32) { // GAME_START
+                gameStarted = true;
+                aiComputed = false;
+                for (let r = 0; r < TET_BH; r++)
+                    for (let c = 0; c < TET_BW; c++) board[r][c] = 0;
+                dead = false;
+                spawn();
+                log('Partida iniciada');
+            }
+            else if (cmd === CMD.STATE_UPDATE && payloadLen === 3 && payload[0] === 0xFE) {
+                // Garbage received
+                const tgtSlot = payload[1];
+                const garbCount = payload[2];
+                if (tgtSlot === pid - 1) {
+                    // Apply garbage to MY board
+                    for (let g = 0; g < garbCount; g++) {
+                        // Check top row
+                        let topBlocked = false;
+                        for (let c = 0; c < TET_BW; c++) if (board[0][c]) { topBlocked = true; break; }
+                        if (topBlocked) { dead = true; break; }
+                        // Shift up
+                        for (let r = 0; r < TET_BH - 1; r++)
+                            for (let c = 0; c < TET_BW; c++) board[r][c] = board[r + 1][c];
+                        // Fill bottom with garbage, 1 random gap
+                        const gap = Math.floor(Math.random() * TET_BW);
+                        for (let c = 0; c < TET_BW; c++) board[TET_BH - 1][c] = (c === gap) ? 0 : 5;
+                    }
+                    aiComputed = false; // recalculate after garbage
+                    log(`Recibido ${garbCount} filas de garbage`);
+                }
+            }
+        }
+    });
+
+    sock.on('error', (err) => {
+        if (err.code !== 'ECONNRESET') log(`Error: ${err.message}`);
+    });
+
+    sock.on('close', () => {
+        log('Desconectado. Reconectando en 5s...');
+        if (interval) clearInterval(interval);
+        setTimeout(() => startTetrisGhost(ghostNum), 5000);
+    });
+
+    // Game loop: AI makes a move every 1.5s, ping every ~15s
+    interval = setInterval(() => {
+        pingCounter++;
+        if (pingCounter >= 5) {
+            pingCounter = 0;
+            if (!sock.destroyed) sock.write(buildPacket(CMD.PING, roomId, pid));
+        }
+        if (!gameStarted || dead) return;
+
+        aiTick();
+    }, 500); // 2 ticks per second
+}
+
 // ── Arranque ──────────────────────────────────────────────────
 
-// Parametros: node ghost-service.js [num_burdyn_ghosts]
 const NUM_BURDYN = parseInt(process.argv[2] || '3', 10);
+const NUM_TETRIS = parseInt(process.argv[3] || '3', 10);
 
-console.log('MSX Online Ghost Service v1.0');
-console.log(`Iniciando: 1 ghost damas + ${NUM_BURDYN} ghost(s) burdyn\n`);
+console.log('MSX Online Ghost Service v1.1');
+console.log(`Iniciando: 1 ghost damas + ${NUM_BURDYN} ghost(s) burdyn + ${NUM_TETRIS} ghost(s) tetris\n`);
 startDamasGhost();
 
-// Ghost #0 crea la sala
+// Burdyn ghosts
 startBurdynGhost(0);
-// Los demas esperan 5s y se unen
 for (let i = 1; i < NUM_BURDYN; i++) {
     setTimeout(() => {
         if (burdynRoomId > 0) {
@@ -430,3 +753,18 @@ for (let i = 1; i < NUM_BURDYN; i++) {
         }
     }, 5000 + i * 1500);
 }
+
+// Tetris ghosts
+setTimeout(() => {
+    startTetrisGhost(0); // Ghost #0 creates room
+    for (let i = 1; i < NUM_TETRIS; i++) {
+        setTimeout(() => {
+            if (tetrisRoomId > 0) {
+                startTetrisGhost(i);
+            } else {
+                console.log(`[TETRIS#${i}] Esperando sala... reintentando en 3s`);
+                setTimeout(() => startTetrisGhost(i), 3000);
+            }
+        }, 3000 + i * 1500);
+    }
+}, 8000); // Start tetris ghosts 8s after burdyn
