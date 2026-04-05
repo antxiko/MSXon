@@ -263,16 +263,24 @@ static void Lock(PL* p, u8 pi) {
     } else { p->dirty=1; Spawn(p); }
 }
 
-static void AddGarbage(PL* p, u8 count) {
-    u8 i, r, c, gap;
+// Forward declarations for network functions used in game logic
+void Net_SendGarbage(u8 targetSlot, u8 count, u8 gapCol);
+void Net_SendPieceLock(u8 linesCleared);
+void Net_SendDead(void);
+
+static void AddGarbageWithGap(PL* p, u8 count, u8 gap) {
+    u8 i, r, c;
     if(p->dead) return;
     for(i=0;i<count;i++){
         for(c=0;c<BW;c++) if(p->bd[0][c]){p->dead=1;return;}
         for(r=0;r<BH-1;r++) for(c=0;c<BW;c++) p->bd[r][c]=p->bd[r+1][c];
-        gap=R8()%BW;
         for(c=0;c<BW;c++) p->bd[BH-1][c]=(c==gap)?0:T_GRB;
     }
     p->dirty=1;
+}
+
+static void AddGarbage(PL* p, u8 count) {
+    AddGarbageWithGap(p, count, R8()%BW);
 }
 
 static void ClearLines(PL* p) {
@@ -284,18 +292,11 @@ static void ClearLines(PL* p) {
     }
     p->fn=0; p->dirty=1;
     if(p->garbQ>0){
-        // Online: send garbage to target's real MSX
-        // Offline: apply locally
-        if(!g_Online)
-            AddGarbage(&g_P[p->target], p->garbQ);
-        else if(p == &g_P[g_MySlot]) {
-            // Send garbage command to target
-            u8 tgt = p->target;
-            g_SendBuf[0]=PROTO_MAGIC_0; g_SendBuf[1]=PROTO_MAGIC_1;
-            g_SendBuf[2]=CMD_STATE_UPDATE; g_SendBuf[3]=g_RoomId; g_SendBuf[4]=g_MyPid;
-            g_SendBuf[5]=3; g_SendBuf[6]=0xFE; // special: garbage command
-            g_SendBuf[7]=tgt; g_SendBuf[8]=p->garbQ;
-            Net_Send(g_Conn, g_SendBuf, 9);
+        u8 gap = R8() % BW;
+        if(!g_Online) {
+            AddGarbageWithGap(&g_P[p->target], p->garbQ, gap);
+        } else if(p == &g_P[g_MySlot]) {
+            Net_SendGarbage(p->target, p->garbQ, gap);
         }
         p->garbQ=0;
     }
@@ -647,47 +648,89 @@ void Net_SendPing(void)
     Net_Send(g_Conn, g_SendBuf, 6);
 }
 
-// STATE_UPDATE
-// Sync packet: 6 header + 85 payload = 91 bytes
-// Payload: [pi, rot, px, py, dead, 80 bytes packed board]
-// Board packed: 2 cells per byte (high nibble = even col, low nibble = odd col)
-#define SYNC_INTERVAL 30  // ~2 per second at 60fps
-static u8 g_SyncBuf[91];
+// STATE_UPDATE packet types
+#define PKT_PIECE_POS  0x01  // 5 bytes: type, pi, rot, px, py
+#define PKT_PIECE_LOCK 0x02  // 6 bytes: type, pi, rot, px, py, linesCleared
+#define PKT_GARBAGE    0x03  // 3 bytes: type, count, gap_col
+#define PKT_DEAD       0x04  // 1 byte:  type
+#define PKT_FULL_SYNC  0x05  // 86 bytes: type, pi, rot, px, py, dead, 80 packed board
+#define SYNC_INTERVAL  300   // full sync every ~5 seconds at 60fps
 
-void Net_SendSync(void)
+// Previous piece state for detecting changes
+static i8 g_NetPrevPX, g_NetPrevPY;
+static u8 g_NetPrevPI, g_NetPrevRot;
+static u8 g_SyncBuf[92];
+
+void Net_SendPiecePos(void)
+{
+    PL* p;
+    if(g_Conn == NET_INVALID_CONN) return;
+    p = &g_P[g_MySlot];
+    g_SendBuf[0]=PROTO_MAGIC_0; g_SendBuf[1]=PROTO_MAGIC_1;
+    g_SendBuf[2]=CMD_STATE_UPDATE; g_SendBuf[3]=g_RoomId; g_SendBuf[4]=g_MyPid;
+    g_SendBuf[5]=5; g_SendBuf[6]=PKT_PIECE_POS;
+    g_SendBuf[7]=p->pi; g_SendBuf[8]=p->rot;
+    g_SendBuf[9]=(u8)p->px; g_SendBuf[10]=(u8)p->py;
+    Net_Send(g_Conn, g_SendBuf, 11);
+    g_NetPrevPI=p->pi; g_NetPrevRot=p->rot;
+    g_NetPrevPX=p->px; g_NetPrevPY=p->py;
+}
+
+void Net_SendPieceLock(u8 linesCleared)
+{
+    PL* p;
+    if(g_Conn == NET_INVALID_CONN) return;
+    p = &g_P[g_MySlot];
+    g_SendBuf[0]=PROTO_MAGIC_0; g_SendBuf[1]=PROTO_MAGIC_1;
+    g_SendBuf[2]=CMD_STATE_UPDATE; g_SendBuf[3]=g_RoomId; g_SendBuf[4]=g_MyPid;
+    g_SendBuf[5]=6; g_SendBuf[6]=PKT_PIECE_LOCK;
+    g_SendBuf[7]=g_NetPrevPI; g_SendBuf[8]=g_NetPrevRot;
+    g_SendBuf[9]=(u8)g_NetPrevPX; g_SendBuf[10]=(u8)g_NetPrevPY;
+    g_SendBuf[11]=linesCleared;
+    Net_Send(g_Conn, g_SendBuf, 12);
+}
+
+void Net_SendGarbage(u8 targetSlot, u8 count, u8 gapCol)
+{
+    if(g_Conn == NET_INVALID_CONN) return;
+    g_SendBuf[0]=PROTO_MAGIC_0; g_SendBuf[1]=PROTO_MAGIC_1;
+    g_SendBuf[2]=CMD_STATE_UPDATE; g_SendBuf[3]=g_RoomId; g_SendBuf[4]=g_MyPid;
+    g_SendBuf[5]=4; g_SendBuf[6]=PKT_GARBAGE;
+    g_SendBuf[7]=targetSlot; g_SendBuf[8]=count; g_SendBuf[9]=gapCol;
+    Net_Send(g_Conn, g_SendBuf, 10);
+}
+
+void Net_SendDead(void)
+{
+    if(g_Conn == NET_INVALID_CONN) return;
+    g_SendBuf[0]=PROTO_MAGIC_0; g_SendBuf[1]=PROTO_MAGIC_1;
+    g_SendBuf[2]=CMD_STATE_UPDATE; g_SendBuf[3]=g_RoomId; g_SendBuf[4]=g_MyPid;
+    g_SendBuf[5]=1; g_SendBuf[6]=PKT_DEAD;
+    Net_Send(g_Conn, g_SendBuf, 7);
+}
+
+void Net_SendFullSync(void)
 {
     u8 r, c, idx;
     PL* p;
     if(g_Conn == NET_INVALID_CONN) return;
-
     p = &g_P[g_MySlot];
 
-    g_SyncBuf[0] = PROTO_MAGIC_0;
-    g_SyncBuf[1] = PROTO_MAGIC_1;
-    g_SyncBuf[2] = CMD_STATE_UPDATE;
-    g_SyncBuf[3] = g_RoomId;
-    g_SyncBuf[4] = g_MyPid;
-    g_SyncBuf[5] = 85; // payload length
+    g_SyncBuf[0]=PROTO_MAGIC_0; g_SyncBuf[1]=PROTO_MAGIC_1;
+    g_SyncBuf[2]=CMD_STATE_UPDATE; g_SyncBuf[3]=g_RoomId; g_SyncBuf[4]=g_MyPid;
+    g_SyncBuf[5]=86; g_SyncBuf[6]=PKT_FULL_SYNC;
+    g_SyncBuf[7]=p->pi; g_SyncBuf[8]=p->rot;
+    g_SyncBuf[9]=(u8)p->px; g_SyncBuf[10]=(u8)p->py;
+    g_SyncBuf[11]=p->dead;
 
-    // Payload starts at byte 6
-    g_SyncBuf[6] = p->pi;
-    g_SyncBuf[7] = p->rot;
-    g_SyncBuf[8] = (u8)p->px;
-    g_SyncBuf[9] = (u8)p->py;
-    g_SyncBuf[10] = p->dead;
-
-    // Pack board: 160 cells → 80 bytes (2 cells per byte)
-    idx = 11;
+    idx = 12;
     for(r = 0; r < BH; r++)
-    {
         for(c = 0; c < BW; c += 2)
         {
             g_SyncBuf[idx] = (p->bd[r][c] << 4) | (p->bd[r][c+1] & 0x0F);
             idx++;
         }
-    }
-
-    Net_Send(g_Conn, g_SyncBuf, 91);
+    Net_Send(g_Conn, g_SyncBuf, 92);
 }
 
 // Forward
@@ -748,38 +791,32 @@ void Net_ProcessPacket(u8 cmd, u8 senderPid, u8* payload, u8 len)
         g_GameState = GSTATE_PLAYING;
         g_Winner = 0xFF;
     }
-    else if(cmd == CMD_STATE_UPDATE && len == 3 && payload[0] == 0xFE)
-    {
-        // Garbage command: someone is sending garbage to a target
-        u8 tgtSlot = payload[1];
-        u8 garbCount = payload[2];
-        if(tgtSlot == g_MySlot)
-            AddGarbage(&g_P[g_MySlot], garbCount);
-    }
-    else if(cmd == CMD_STATE_UPDATE && len >= 85)
+    else if(cmd == CMD_STATE_UPDATE && len >= 1)
     {
         u8 slot = senderPid - 1;
-        if(slot < NP && slot != g_MySlot)
+        u8 pktType = payload[0];
+
+        if(pktType == PKT_GARBAGE && len >= 4)
+        {
+            u8 gTarget = payload[1];
+            u8 gCount = payload[2];
+            u8 gGap = payload[3];
+            if(gTarget == g_MySlot)
+                AddGarbageWithGap(&g_P[g_MySlot], gCount, gGap);
+        }
+        else if(pktType == PKT_FULL_SYNC && len >= 86 && slot < NP && slot != g_MySlot)
         {
             u8 r, c, idx;
-            // Unpack piece state
-            g_P[slot].pi = payload[0];
-            g_P[slot].rot = payload[1];
-            g_P[slot].px = (i8)payload[2];
-            g_P[slot].py = (i8)payload[3];
-            g_P[slot].dead = payload[4];
-
-            // Unpack board: 80 bytes → 160 cells
-            idx = 5;
-            for(r = 0; r < BH; r++)
-            {
-                for(c = 0; c < BW; c += 2)
-                {
+            g_P[slot].pi = payload[1]; g_P[slot].rot = payload[2];
+            g_P[slot].px = (i8)payload[3]; g_P[slot].py = (i8)payload[4];
+            g_P[slot].dead = payload[5];
+            idx = 6;
+            for(r=0;r<BH;r++)
+                for(c=0;c<BW;c+=2){
                     g_P[slot].bd[r][c] = (payload[idx] >> 4) & 0x0F;
                     g_P[slot].bd[r][c+1] = payload[idx] & 0x0F;
                     idx++;
                 }
-            }
             g_P[slot].dirty = 1;
         }
     }
@@ -1060,12 +1097,16 @@ void main(void)
         {
             DoInput();
 
+            prevDead = g_P[g_MySlot].dead;
             PlayerUpdate(&g_P[g_MySlot], g_MySlot);
 
-            // Send full board sync periodically
-            g_FrameCnt++;
-            if(g_Online && (g_FrameCnt % SYNC_INTERVAL) == 0)
-                Net_SendSync();
+            if(g_Online)
+            {
+                // Send full board state every 5 frames (~12 times/sec)
+                g_FrameCnt++;
+                if((g_FrameCnt % 5) == 0)
+                    Net_SendFullSync();
+            }
 
             // Offline: update others
             if(!g_Online)

@@ -347,13 +347,13 @@ function startBurdynGhost(ghostNum) {
             if (cmd === CMD.AUTH_OK) {
                 log(`Auth OK (idx=${idx}, burdynRoomId=${burdynRoomId})`);
                 if (idx === 0) {
-                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x02])));
+                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x01])));
                 } else if (burdynRoomId > 0) {
                     log(`JOIN sala 0x${burdynRoomId.toString(16).padStart(2, '0')}`);
                     sock.write(buildPacket(0x21, 0, 0, Buffer.from([burdynRoomId])));
                 } else {
                     log('ERROR: burdynRoomId=0, creando sala propia');
-                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x02])));
+                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x01])));
                 }
             }
             else if (cmd === CMD.ROOM_INFO) {
@@ -516,7 +516,7 @@ function startTetrisGhost(ghostNum) {
         rot = 0; px = 3; py = 0;
         if (!tetValid(board, pi, rot, px, py)) {
             dead = true;
-            // dead state will be sent via sync
+            sendDead();
         }
     }
 
@@ -544,8 +544,8 @@ function startTetrisGhost(ghostNum) {
         const garbT = [0, 0, 1, 2, 4];
         const garb = garbT[Math.min(linesCleared, 4)];
 
+        sendPieceLock(linesCleared);
         spawn();
-        // Sync will be sent on next aiTick
     }
 
     let aiTargetX = 3, aiTargetRot = 0, aiComputed = false;
@@ -593,27 +593,45 @@ function startTetrisGhost(ghostNum) {
             aiComputed = false;
         }
 
-        // Send full board sync
-        sendSync();
+        // Send full board state
+        sendFullSync();
     }
 
-    function sendSync() {
+    let syncCounter = 0;
+
+    function sendPiecePos() {
         if (sock.destroyed) return;
-        const payload = Buffer.alloc(85);
-        payload[0] = pi;
-        payload[1] = rot;
-        payload[2] = px & 0xFF;
-        payload[3] = py & 0xFF;
-        payload[4] = dead ? 1 : 0;
-        // Pack board: 2 cells per byte
-        let idx = 5;
-        for (let r = 0; r < TET_BH; r++) {
+        sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid,
+            Buffer.from([0x01, pi, rot, px & 0xFF, py & 0xFF])));
+    }
+
+    function sendPieceLock(linesCleared) {
+        if (sock.destroyed) return;
+        sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid,
+            Buffer.from([0x02, pi, rot, px & 0xFF, py & 0xFF, linesCleared])));
+    }
+
+    function sendFullSync() {
+        if (sock.destroyed) return;
+        const payload = Buffer.alloc(86);
+        payload[0] = 0x05; // PKT_FULL_SYNC
+        payload[1] = pi;
+        payload[2] = rot;
+        payload[3] = px & 0xFF;
+        payload[4] = py & 0xFF;
+        payload[5] = dead ? 1 : 0;
+        let idx = 6;
+        for (let r = 0; r < TET_BH; r++)
             for (let c = 0; c < TET_BW; c += 2) {
                 payload[idx] = ((board[r][c] & 0x0F) << 4) | (board[r][c+1] & 0x0F);
                 idx++;
             }
-        }
         sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, payload));
+    }
+
+    function sendDead() {
+        if (sock.destroyed) return;
+        sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, Buffer.from([0x04])));
     }
 
     sock.connect(SERVER_PORT, SERVER_IP, () => {
@@ -684,11 +702,12 @@ function startTetrisGhost(ghostNum) {
                 spawn();
                 log('Partida iniciada');
             }
-            else if (cmd === CMD.STATE_UPDATE && payloadLen === 3 && payload[0] === 0xFE) {
-                // Garbage received
-                const tgtSlot = payload[1];
+            else if (cmd === CMD.STATE_UPDATE && payloadLen >= 4 && payload[0] === 0x03) {
+                // PKT_GARBAGE: targetSlot, count, gapCol
+                const garbTarget = payload[1];
                 const garbCount = payload[2];
-                if (tgtSlot === pid - 1) {
+                const garbGap = payload[3];
+                if (garbTarget === pid - 1) { // only apply if targeted at me
                     // Apply garbage to MY board
                     for (let g = 0; g < garbCount; g++) {
                         // Check top row
@@ -698,9 +717,8 @@ function startTetrisGhost(ghostNum) {
                         // Shift up
                         for (let r = 0; r < TET_BH - 1; r++)
                             for (let c = 0; c < TET_BW; c++) board[r][c] = board[r + 1][c];
-                        // Fill bottom with garbage, 1 random gap
-                        const gap = Math.floor(Math.random() * TET_BW);
-                        for (let c = 0; c < TET_BW; c++) board[TET_BH - 1][c] = (c === gap) ? 0 : 5;
+                        // Fill bottom with garbage, gap from packet
+                        for (let c = 0; c < TET_BW; c++) board[TET_BH - 1][c] = (c === garbGap) ? 0 : 5;
                     }
                     aiComputed = false; // recalculate after garbage
                     log(`Recibido ${garbCount} filas de garbage`);
