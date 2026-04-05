@@ -19,9 +19,10 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 |-------|---------|-----------|------|--------|--------|
 | **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | ✅ Funcional (MOL_039) |
 | **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | ✅ Funcional (DAM_022) |
-| **Burdyn RPG** | 0x03 | 14 | AGGREGATE | Screen 4 | ✅ Funcional (BURD_024) |
+| **Burdyn RPG** | 0x03 | 14 | RELAY | Screen 4 | ✅ Funcional (BURD_025) |
 | **Parchis** | 0x04 | 4 | RELAY | Screen 4 | ✅ Funcional (PAR_011) |
 | **Texas Hold'em** | 0x05 | 6 | RELAY | Screen 4 | 🚧 En desarrollo (TEX_015) |
+| **Tetris 4P** | 0x06 | 4 | RELAY | Screen 4 | ✅ Funcional (TET_021) |
 
 ### Ball Demo (`client/`)
 Demo de sprites multijugador. Cada jugador mueve una bola por la pantalla en Screen 5 (bitmap). Hasta 4 jugadores por sala.
