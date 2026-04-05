@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Texas Hold'em — Table Layout Editor</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #222; color: #eee; font-family: monospace; display: flex; }
+#sidebar { width: 320px; padding: 10px; background: #333; height: 100vh; overflow-y: auto; }
+#main { flex: 1; padding: 10px; }
+canvas { border: 1px solid #555; cursor: crosshair; image-rendering: pixelated; }
+h2 { margin: 10px 0 5px; color: #ff0; font-size: 14px; }
+h3 { margin: 8px 0 4px; color: #aaa; font-size: 12px; }
+button { margin: 2px; padding: 4px 10px; cursor: pointer; font-family: monospace; font-size: 12px; }
+.mode-btn { background: #555; color: #fff; border: 1px solid #777; }
+.mode-btn.active { background: #f80; color: #000; }
+.info { color: #aaa; font-size: 11px; margin: 4px 0; }
+#output { width: 100%; height: 250px; background: #111; color: #0f0; border: 1px solid #555; font-size: 11px; margin-top: 10px; }
+.seat-color { display: inline-block; width: 12px; height: 12px; margin-right: 4px; vertical-align: middle; }
+.coord { color: #0ff; font-size: 11px; }
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+    <h2>TEXAS HOLD'EM EDITOR</h2>
+    <p class="info">Click en la cuadricula 32x24.<br>Cada celda = 1 tile (8x8px).</p>
+
+    <h3>MODO</h3>
+    <button class="mode-btn active" onclick="setMode('seat_name')" id="btn_seat_name">Nombre J</button>
+    <button class="mode-btn" onclick="setMode('seat_cards')" id="btn_seat_cards">Cartas J</button>
+    <button class="mode-btn" onclick="setMode('community')" id="btn_community">Comunitarias</button>
+    <button class="mode-btn" onclick="setMode('mycards')" id="btn_mycards">Mis Cartas</button>
+    <button class="mode-btn" onclick="setMode('hud')" id="btn_hud">HUD</button>
+    <button class="mode-btn" onclick="setMode('actions')" id="btn_actions">Acciones</button>
+    <button class="mode-btn" onclick="setMode('bottext')" id="btn_bottext">Texto Bot</button>
+    <button class="mode-btn" onclick="setMode('separator')" id="btn_separator">Separador</button>
+    <button class="mode-btn" onclick="setMode('table_tl')" id="btn_table_tl">Mesa TL</button>
+    <button class="mode-btn" onclick="setMode('table_br')" id="btn_table_br">Mesa BR</button>
+
+    <h3>JUGADOR (para Nombre/Cartas)</h3>
+    <button class="mode-btn active" onclick="setSeat(0)" id="btn_s0"><span class="seat-color" style="background:#ff0"></span>J1</button>
+    <button class="mode-btn" onclick="setSeat(1)" id="btn_s1"><span class="seat-color" style="background:#55f"></span>J2</button>
+    <button class="mode-btn" onclick="setSeat(2)" id="btn_s2"><span class="seat-color" style="background:#f55"></span>J3</button>
+    <button class="mode-btn" onclick="setSeat(3)" id="btn_s3"><span class="seat-color" style="background:#5f5"></span>J4</button>
+    <button class="mode-btn" onclick="setSeat(4)" id="btn_s4"><span class="seat-color" style="background:#f5f"></span>J5</button>
+    <button class="mode-btn" onclick="setSeat(5)" id="btn_s5"><span class="seat-color" style="background:#5ff"></span>J6</button>
+
+    <h3>MAPA DE FILAS</h3>
+    <div id="rowmap"></div>
+
+    <h3>POSICIONES</h3>
+    <div id="positions"></div>
+
+    <h3>ACCIONES</h3>
+    <button onclick="exportC()">Exportar C</button>
+    <button onclick="saveJSON()">Guardar JSON</button>
+    <button onclick="loadJSON()">Cargar JSON</button>
+
+    <h3>CODIGO C</h3>
+    <textarea id="output" readonly></textarea>
+</div>
+
+<div id="main">
+    <canvas id="canvas" width="768" height="576"></canvas>
+    <p class="info" id="mouseInfo">Col: 0  Row: 0</p>
+</div>
+
+<script>
+const COLS = 32, ROWS = 24;
+const TILE = 24;
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = COLS * TILE;
+canvas.height = ROWS * TILE;
+
+let mode = 'seat_name';
+let currentSeat = 0;
+
+const layout = {
+    seatNameCol: [0, 0, 0, 24, 24, 24],
+    seatNameRow: [15, 10, 5, 5, 10, 15],
+    seatCardCol: [3, 2, 4, 24, 26, 25],
+    seatCardRow: [12, 7, 2, 2, 7, 12],
+    communityCol: 10,
+    communityRow: 9,
+    myCardsCol: 3,
+    myCardsRow: 18,
+    hudRow: 17,
+    actionsRow: 22,
+    botTextRow: 16,
+    botTextCol: 11,
+    separatorRow: 16,
+    tableTL_col: 8, tableTL_row: 5,
+    tableBR_col: 23, tableBR_row: 14,
+};
+
+const seatColors = ['#ff0', '#55f', '#f55', '#5f5', '#f5f', '#5ff'];
+const seatNames = ['J1','J2','J3','J4','J5','J6'];
+
+function setMode(m) {
+    mode = m;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    const btn = document.getElementById('btn_' + m);
+    if (btn) btn.classList.add('active');
+}
+
+function setSeat(s) {
+    currentSeat = s;
+    for (let i = 0; i < 6; i++)
+        document.getElementById('btn_s' + i).classList.toggle('active', i === s);
+}
+
+function draw() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Grid
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+    for (let c = 0; c <= COLS; c++) {
+        ctx.beginPath(); ctx.moveTo(c*TILE, 0); ctx.lineTo(c*TILE, ROWS*TILE); ctx.stroke();
+    }
+    for (let r = 0; r <= ROWS; r++) {
+        ctx.beginPath(); ctx.moveTo(0, r*TILE); ctx.lineTo(COLS*TILE, r*TILE); ctx.stroke();
+    }
+
+    // Row numbers
+    ctx.fillStyle = '#444';
+    ctx.font = '9px monospace';
+    for (let r = 0; r < ROWS; r++)
+        ctx.fillText(r.toString().padStart(2), 2, r * TILE + 12);
+
+    // Table felt
+    const tl_c = layout.tableTL_col, tl_r = layout.tableTL_row;
+    const br_c = layout.tableBR_col, br_r = layout.tableBR_row;
+    const tw = (br_c - tl_c + 1) * TILE;
+    const th = (br_r - tl_r + 1) * TILE;
+    ctx.fillStyle = '#060';
+    ctx.fillRect(tl_c * TILE, tl_r * TILE, tw, th);
+    ctx.strokeStyle = '#0a0';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(tl_c * TILE, tl_r * TILE, tw, th);
+
+    // Separator
+    ctx.fillStyle = '#444';
+    ctx.fillRect(0, layout.separatorRow * TILE, COLS * TILE, TILE);
+    drawRowLabel(0, layout.separatorRow, 32, '#444', '--- SEPARADOR ---');
+
+    // HUD
+    drawRowLabel(0, layout.hudRow, 32, '#335', 'BOTE:XXX  CIEGA:10/20  M:XXX');
+
+    // Bot text
+    drawRowLabel(layout.botTextCol, layout.botTextRow, 12, '#533', 'J3 IGUALAR');
+
+    // Seats
+    for (let s = 0; s < 6; s++) {
+        // Name (8 tiles wide, 1 tall)
+        drawRowLabel(layout.seatNameCol[s], layout.seatNameRow[s], 8, seatColors[s] + '44', seatNames[s] + ' 9800');
+        // Cards (4 wide, 3 tall)
+        drawCardPair(layout.seatCardCol[s], layout.seatCardRow[s], seatColors[s], seatNames[s]);
+    }
+
+    // Community (5 cards x 2 wide = 10, 3 tall)
+    for (let i = 0; i < 5; i++) {
+        drawCardOutline(layout.communityCol + i * 2, layout.communityRow, '#fff', 'C' + (i+1));
+    }
+
+    // My cards
+    drawCardOutline(layout.myCardsCol, layout.myCardsRow, '#ff0', 'M1');
+    drawCardOutline(layout.myCardsCol + 3, layout.myCardsRow, '#ff0', 'M2');
+
+    // Actions
+    drawRowLabel(0, layout.actionsRow, 32, '#353', 'NO IR  PASAR  SUBIR  TODO');
+    drawRowLabel(0, layout.actionsRow + 1, 32, '#242', '       >>>     +20');
+
+    updateInfo();
+}
+
+function drawRowLabel(col, row, w, color, text) {
+    ctx.fillStyle = color;
+    ctx.fillRect(col * TILE, row * TILE, w * TILE, TILE);
+    ctx.fillStyle = '#fff';
+    ctx.font = '10px monospace';
+    ctx.fillText(text, col * TILE + 3, row * TILE + 15);
+}
+
+function drawCardPair(col, row, color, label) {
+    for (let c = 0; c < 2; c++) {
+        const x = (col + c * 2) * TILE;
+        const y = row * TILE;
+        ctx.fillStyle = color + '22';
+        ctx.fillRect(x, y, 2 * TILE, 3 * TILE);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1;
+        ctx.strokeRect(x + 1, y + 1, 2 * TILE - 2, 3 * TILE - 2);
+        ctx.fillStyle = color;
+        ctx.font = '9px monospace';
+        ctx.fillText(c === 0 ? 'c1' : 'c2', x + 8, y + TILE + 10);
+    }
+}
+
+function drawCardOutline(col, row, color, label) {
+    const x = col * TILE, y = row * TILE;
+    ctx.fillStyle = color + '22';
+    ctx.fillRect(x, y, 2 * TILE, 3 * TILE);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x + 1, y + 1, 2 * TILE - 2, 3 * TILE - 2);
+    ctx.fillStyle = color;
+    ctx.font = '10px monospace';
+    ctx.fillText(label, x + 6, y + TILE + 8);
+}
+
+function updateInfo() {
+    // Row map
+    let rm = '<div style="font-size:10px; line-height:1.4">';
+    for (let r = 0; r < ROWS; r++) {
+        let usage = '';
+        for (let s = 0; s < 6; s++) {
+            if (layout.seatNameRow[s] === r) usage += ` <span style="color:${seatColors[s]}">J${s+1}name</span>`;
+            if (r >= layout.seatCardRow[s] && r < layout.seatCardRow[s] + 3) usage += ` <span style="color:${seatColors[s]}">J${s+1}card</span>`;
+        }
+        if (r >= layout.communityRow && r < layout.communityRow + 3) usage += ' <span style="color:#fff">community</span>';
+        if (r >= layout.myCardsRow && r < layout.myCardsRow + 3) usage += ' <span style="color:#ff0">mycards</span>';
+        if (r === layout.hudRow) usage += ' <span style="color:#88f">HUD</span>';
+        if (r === layout.actionsRow || r === layout.actionsRow + 1) usage += ' <span style="color:#8f8">actions</span>';
+        if (r === layout.botTextRow) usage += ' <span style="color:#f88">bottext</span>';
+        if (r === layout.separatorRow) usage += ' <span style="color:#888">sep</span>';
+        if (r >= layout.tableTL_row && r <= layout.tableBR_row) usage += ' <span style="color:#0a0">mesa</span>';
+        rm += `R${r.toString().padStart(2,'0')}:${usage || ' ---'}<br>`;
+    }
+    rm += '</div>';
+    document.getElementById('rowmap').innerHTML = rm;
+
+    // Positions
+    let html = '';
+    for (let s = 0; s < 6; s++) {
+        html += `<div class="coord" style="color:${seatColors[s]}">`;
+        html += `${seatNames[s]}: n(${layout.seatNameCol[s]},${layout.seatNameRow[s]}) c(${layout.seatCardCol[s]},${layout.seatCardRow[s]})`;
+        html += '</div>';
+    }
+    html += `<div class="coord">Comm: (${layout.communityCol},${layout.communityRow})</div>`;
+    html += `<div class="coord">MyCards: (${layout.myCardsCol},${layout.myCardsRow})</div>`;
+    html += `<div class="coord">HUD: row ${layout.hudRow}</div>`;
+    html += `<div class="coord">Actions: row ${layout.actionsRow}</div>`;
+    html += `<div class="coord">BotText: (${layout.botTextCol},${layout.botTextRow})</div>`;
+    html += `<div class="coord">Sep: row ${layout.separatorRow}</div>`;
+    html += `<div class="coord">Mesa: (${layout.tableTL_col},${layout.tableTL_row})-(${layout.tableBR_col},${layout.tableBR_row})</div>`;
+    document.getElementById('positions').innerHTML = html;
+}
+
+canvas.addEventListener('mousemove', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const col = Math.floor((e.clientX - rect.left) / TILE);
+    const row = Math.floor((e.clientY - rect.top) / TILE);
+    document.getElementById('mouseInfo').textContent = `Col: ${col}  Row: ${row}`;
+});
+
+canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const col = Math.floor((e.clientX - rect.left) / TILE);
+    const row = Math.floor((e.clientY - rect.top) / TILE);
+
+    switch (mode) {
+        case 'seat_name':
+            layout.seatNameCol[currentSeat] = col;
+            layout.seatNameRow[currentSeat] = row;
+            break;
+        case 'seat_cards':
+            layout.seatCardCol[currentSeat] = col;
+            layout.seatCardRow[currentSeat] = row;
+            break;
+        case 'community':
+            layout.communityCol = col;
+            layout.communityRow = row;
+            break;
+        case 'mycards':
+            layout.myCardsCol = col;
+            layout.myCardsRow = row;
+            break;
+        case 'hud':
+            layout.hudRow = row;
+            break;
+        case 'actions':
+            layout.actionsRow = row;
+            break;
+        case 'bottext':
+            layout.botTextCol = col;
+            layout.botTextRow = row;
+            break;
+        case 'separator':
+            layout.separatorRow = row;
+            break;
+        case 'table_tl':
+            layout.tableTL_col = col;
+            layout.tableTL_row = row;
+            break;
+        case 'table_br':
+            layout.tableBR_col = col;
+            layout.tableBR_row = row;
+            break;
+    }
+    draw();
+});
+
+function exportC() {
+    let c = '// Auto-generated from table_editor.html\n\n';
+    c += 'const u8 g_SeatNameCol[6] = { ' + layout.seatNameCol.map(v => v.toString().padStart(2)).join(', ') + ' };\n';
+    c += 'const u8 g_SeatNameRow[6] = { ' + layout.seatNameRow.map(v => v.toString().padStart(2)).join(', ') + ' };\n';
+    c += 'const u8 g_SeatCardCol[6] = { ' + layout.seatCardCol.map(v => v.toString().padStart(2)).join(', ') + ' };\n';
+    c += 'const u8 g_SeatCardRow[6] = { ' + layout.seatCardRow.map(v => v.toString().padStart(2)).join(', ') + ' };\n\n';
+    c += '#define COMMUNITY_COL  ' + layout.communityCol + '\n';
+    c += '#define COMMUNITY_ROW  ' + layout.communityRow + '\n';
+    c += '#define MYCARDS_COL    ' + layout.myCardsCol + '\n';
+    c += '#define MYCARDS_ROW    ' + layout.myCardsRow + '\n';
+    c += '#define HUD_ROW        ' + layout.hudRow + '\n';
+    c += '#define ACTIONS_ROW    ' + layout.actionsRow + '\n';
+    c += '#define BOTTEXT_COL    ' + layout.botTextCol + '\n';
+    c += '#define BOTTEXT_ROW    ' + layout.botTextRow + '\n';
+    c += '#define SEPARATOR_ROW  ' + layout.separatorRow + '\n';
+    c += '#define TABLE_TL_COL   ' + layout.tableTL_col + '\n';
+    c += '#define TABLE_TL_ROW   ' + layout.tableTL_row + '\n';
+    c += '#define TABLE_BR_COL   ' + layout.tableBR_col + '\n';
+    c += '#define TABLE_BR_ROW   ' + layout.tableBR_row + '\n';
+    document.getElementById('output').value = c;
+}
+
+function saveJSON() {
+    const json = JSON.stringify(layout, null, 2);
+    const blob = new Blob([json], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'table_layout.json';
+    a.click();
+}
+
+function loadJSON() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = (e) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            const data = JSON.parse(ev.target.result);
+            Object.assign(layout, data);
+            draw();
+            exportC();
+        };
+        reader.readAsText(e.target.files[0]);
+    };
+    input.click();
+}
+
+draw();
+exportC();
+</script>
+</body>
+</html>

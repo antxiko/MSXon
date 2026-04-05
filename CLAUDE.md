@@ -1,16 +1,18 @@
 # MSX ONLINE — Contexto del proyecto para Claude
-# Ultima actualizacion: 2026-04-03
-# Estado: Ball Demo (MOL_038) y Burdyn RPG (BURD_012) funcionando en MSX real con multiplayer
+# Ultima actualizacion: 2026-04-05
+# Estado: 4 juegos online — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_024), Parchis (PAR_011)
 
 ---
 
 ## QUE ES ESTE PROYECTO
 
-Plataforma de juegos online para MSX reales (Z80) con tres componentes:
+Plataforma de juegos online para MSX reales (Z80) con cinco componentes:
 
 1. **Servidor Node.js** (`server/msx-gameserver.js`) — gestiona salas, relay + aggregation
 2. **Ball Demo** (`client/`) — demo de sprites multijugador en Screen 5 (GAME_ID=0x01)
-3. **Burdyn** (`burdyn/`) — RPG crawler multijugador en Screen 4 (GAME_ID=0x03)
+3. **Damas** (`damas/`) — damas online 2 jugadores en Screen 4 (GAME_ID=0x02)
+4. **Burdyn** (`burdyn/`) — RPG crawler multijugador en Screen 4 (GAME_ID=0x03)
+5. **Parchis** (`parchis/`) — parchis online 4 jugadores en Screen 4 (GAME_ID=0x04)
 
 Codigo compartido en `shared/`: network.h, protocol.h, log.h
 
@@ -31,6 +33,7 @@ MSXonLINE/                           <-- Repo GitHub (antxiko/MSXonLINE)
 |-- server/
 |   |-- msx-gameserver.js            <-- Servidor TCP (relay + aggregate)
 |   |-- server-status.js             <-- Monitor interactivo + ghost player
+|   |-- ghost-service.js             <-- Ghosts persistentes en VPS
 |   |-- update.sh                    <-- Script de actualizacion VPS
 |   +-- msx-server.service           <-- Unidad systemd
 |
@@ -41,22 +44,37 @@ MSXonLINE/                           <-- Repo GitHub (antxiko/MSXonLINE)
 |
 |-- client/                          <-- Ball Demo (GAME_ID=0x01, Screen 5)
 |   |-- msxonline.c                  <-- Fuente principal
-|   |-- network.h, protocol.h, log.h, msxgl_config.h
-|   +-- build: MOL_038
+|   +-- build: MOL_039
+|
+|-- damas/                           <-- Damas (GAME_ID=0x02, Screen 4)
+|   |-- damas.c                      <-- Fuente principal
+|   +-- build: DAM_022
 |
 |-- burdyn/                          <-- RPG Crawler (GAME_ID=0x03, Screen 4)
 |   |-- burdyn.c                     <-- Fuente principal
 |   |-- editor.html                  <-- Editor de mapas HTML
 |   |-- assets/burdyn_map.bin        <-- Mapa 64x64
-|   |-- log.h, msxgl_config.h, project_config.js
-|   +-- build: BURD_012
+|   +-- build: BURD_024
+|
+|-- parchis/                         <-- Parchis (GAME_ID=0x04, Screen 4)
+|   |-- parchis.c                    <-- Fuente principal (NO incluido, solo en MSXgl)
+|   |-- path_editor.html             <-- Editor visual del tablero
+|   |-- tileset.png                  <-- Tileset grafico
+|   |-- screen_layout.json           <-- Layout 32x24 del tablero
+|   |-- parchis_path.json            <-- Recorrido + casas + pasillos
+|   +-- build: PAR_011
 |
 |-- PROTOCOL.md                      <-- Especificacion del protocolo
 |-- COMMANDS.md                      <-- Referencia de comandos SSH/deploy
 +-- README.md
 ```
 
-El directorio de compilacion real es `MSXgl/projects/msxonline/` y `MSXgl/projects/burdyn/` (fuera del repo). Los fuentes se sincronizan al repo antes de push.
+Directorios de compilacion (fuera del repo):
+- `MSXgl/projects/msxonline/` — Ball Demo
+- `MSXgl/projects/damas/` — Damas
+- `MSXgl/projects/burdyn/` — Burdyn
+- `MSXgl/projects/parchis/` — Parchis
+Los fuentes se sincronizan al repo antes de push.
 
 ---
 
@@ -98,12 +116,22 @@ cd ~/Documents/MSXonLIVE/MSXonLINE && sed -i 's/\r$//' server/update.sh && scp s
 cd MSXgl/projects/msxonline && bash build.sh
 ```
 
+### Damas
+```bash
+cd MSXgl/projects/damas && bash build.sh
+```
+
 ### Burdyn
 ```bash
 cd MSXgl/projects/burdyn && bash build.sh
 ```
 
-Ambos generan .COM en `out/` y DSK en `emul/dsk/`. Copiar a `build/bin/` y `build/dsk/`.
+### Parchis
+```bash
+cd MSXgl/projects/parchis && bash build.sh
+```
+
+Todos generan .COM en `out/` y DSK en `emul/dsk/`. Copiar a `build/bin/` y `build/dsk/`.
 
 ### Requisitos
 - SDCC 4.5.0 (`C:\Program Files\SDCC` o `MSXgl/tools/sdcc/`)
@@ -143,7 +171,7 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
-## BALL DEMO (MOL_038)
+## BALL DEMO (MOL_039)
 
 - Screen 5 (256x212, 16 colores bitmap)
 - Sprites Mode 2 (VDP_SetSpriteExUniColor)
@@ -154,7 +182,19 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
-## BURDYN RPG (BURD_012)
+## DAMAS (DAM_022)
+
+- Screen 4 (Graphic 3, 32x24 tiles)
+- Tablero 8x8, 2 jugadores
+- Sprites Mode 2 para fichas
+- Lobby grafico filtrado por GAME_ID_DAMAS (0x02)
+- RELAY mode con endTurn flag (payload[4])
+- Multi-captura: endTurn=0 mientras queden capturas
+- GAME_ID = 0x02, modo RELAY
+
+---
+
+## BURDYN RPG (BURD_024)
 
 - Screen 4 (Graphic 3, 32x24 tiles)
 - Mapa 64x64 cargado desde BURDYN.MAP
@@ -169,6 +209,23 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
+## PARCHIS (PAR_011)
+
+- Screen 4 (Graphic 3, 32x24 tiles)
+- Tablero parchis, 4 jugadores humanos (sin IA online)
+- Sprites Mode 2 (8x8) para fichas (16 sprites max)
+- Recorrido 68 casillas + 8 pasillo por color + 12 casillas seguras
+- Dado animado con tiles 2x2 (6 caras)
+- Tileset: A=tile 97, a=129, 0=80, negro=tile 0
+- Lobby grafico filtrado por GAME_ID_PARCHIS (0x04)
+- P1 (host) arranca partida con S (CMD_GAME_START)
+- RELAY mode con endTurn flag
+- Reglas: sacar 5 para salir, 3 seises pierde ficha, barreras, bonus captura/meta
+- path_editor.html para editar tablero visualmente
+- GAME_ID = 0x04, modo RELAY
+
+---
+
 ## REGLAS PARA CLAUDE
 
 1. **NUNCA tocar conectividad cuando se piden cambios de UI** — rompe la conexion
@@ -176,7 +233,7 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 3. **NUNCA restaurar desde repo sin re-aplicar fixes de network.h** — g_ConnResult, flush
 4. **"Cliente" = MSX siempre** — nunca PC client salvo que se diga explicitamente
 5. **ForceRamAddr = 0x8000 siempre** en project_config.js
-6. **Builds versionadas**: MOL_XXX (Ball Demo), BURD_XXX (Burdyn), max 5 copias
+6. **Builds versionadas**: MOL_XXX, DAM_XXX, BURD_XXX, PAR_XXX — max 5 copias cada una
 7. **SDCC: variables al inicio de funcion**, no declarar dentro de for/if
 
 ---

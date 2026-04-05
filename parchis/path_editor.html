@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Parchís — Editor de recorrido</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #1a1a2e; color: #eee; font-family: monospace; padding: 10px; }
+#info { margin-bottom: 8px; font-size: 13px; }
+#info span { color: #e94560; font-weight: bold; }
+canvas { image-rendering: pixelated; cursor: crosshair; border: 1px solid #333; }
+#modes { margin: 8px 0; display: flex; gap: 5px; flex-wrap: wrap; }
+.mode-btn { padding: 6px 12px; background: #0f3460; color: #eee; border: 2px solid #333; cursor: pointer; font-family: monospace; font-size: 12px; }
+.mode-btn.active { border-color: #e94560; background: #e94560; }
+.mode-btn:hover { border-color: #e94560; }
+#controls { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; }
+button { padding: 6px 14px; background: #0f3460; color: #eee; border: 1px solid #e94560; cursor: pointer; font-family: monospace; font-size: 12px; }
+button:hover { background: #e94560; }
+textarea { width: 100%; height: 200px; background: #0a0a1a; color: #0f0; border: 1px solid #333; font-family: monospace; font-size: 10px; margin-top: 8px; }
+#status { margin-top: 5px; color: #aaa; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div id="info">
+    Modo: <span id="modeName">RECORRIDO</span> |
+    Orientacion: <span id="orient">H</span> (O para cambiar) |
+    Casillas: <span id="count">0</span>
+</div>
+
+<div id="modes">
+    <div class="mode-btn active" onclick="setMode('path')">RECORRIDO</div>
+    <div class="mode-btn" onclick="setMode('safe')">SEGURAS</div>
+    <div class="mode-btn" onclick="setMode('exit_r')">SALIDA ROJO</div>
+    <div class="mode-btn" onclick="setMode('exit_g')">SALIDA VERDE</div>
+    <div class="mode-btn" onclick="setMode('exit_y')">SALIDA AMARILLO</div>
+    <div class="mode-btn" onclick="setMode('exit_b')">SALIDA AZUL</div>
+    <div class="mode-btn" onclick="setMode('pass_r')">PASILLO ROJO</div>
+    <div class="mode-btn" onclick="setMode('pass_g')">PASILLO VERDE</div>
+    <div class="mode-btn" onclick="setMode('pass_y')">PASILLO AMARILLO</div>
+    <div class="mode-btn" onclick="setMode('pass_b')">PASILLO AZUL</div>
+    <div class="mode-btn" onclick="setMode('home_r')">CASA ROJO</div>
+    <div class="mode-btn" onclick="setMode('home_g')">CASA VERDE</div>
+    <div class="mode-btn" onclick="setMode('home_y')">CASA AMARILLO</div>
+    <div class="mode-btn" onclick="setMode('home_b')">CASA AZUL</div>
+</div>
+
+<canvas id="board"></canvas>
+
+<div id="controls">
+    <button onclick="undoLast()">Deshacer (click dcho)</button>
+    <button onclick="clearMode()">Borrar modo actual</button>
+    <button onclick="clearAll()">Borrar TODO</button>
+    <button onclick="exportAll()">Exportar C</button>
+    <button onclick="saveJSON()">Guardar JSON</button>
+    <button onclick="loadJSON()">Cargar JSON</button>
+</div>
+<div id="status">Click en las casillas del recorrido en orden. O para cambiar H/V.</div>
+<textarea id="output" placeholder="Exportar aqui..."></textarea>
+<input type="file" id="fileInput" style="display:none" accept=".json" onchange="loadJSONFile(event)">
+
+<script>
+const TILE_SIZE = 8, ZOOM = 3, SZ = TILE_SIZE * ZOOM;
+const MAP_W = 32, MAP_H = 24;
+
+let screenMap = [];
+let tilesetCanvas = null;
+let orientation = 'h';
+let mode = 'path';
+
+// Datos
+let data = {
+    path: [],       // [{col,row,dir}] — recorrido 68 casillas
+    safe: [],       // [{col,row,dir}] — casillas seguras
+    exit_r: [],     // [{col,row,dir}] — salida rojo (1 casilla)
+    exit_g: [],
+    exit_y: [],
+    exit_b: [],
+    pass_r: [],     // [{col,row,dir}] — pasillo rojo (7 casillas)
+    pass_g: [],
+    pass_y: [],
+    pass_b: [],
+    home_r: [],     // [{col,row}] — casa rojo (4 posiciones)
+    home_g: [],
+    home_y: [],
+    home_b: [],
+};
+
+const MODE_COLORS = {
+    path:   'rgba(229, 69, 96, 0.45)',
+    safe:   'rgba(255, 255, 0, 0.5)',
+    exit_r: 'rgba(255, 50, 50, 0.6)',
+    exit_g: 'rgba(50, 200, 50, 0.6)',
+    exit_y: 'rgba(255, 220, 50, 0.6)',
+    exit_b: 'rgba(50, 100, 255, 0.6)',
+    pass_r: 'rgba(255, 80, 80, 0.4)',
+    pass_g: 'rgba(80, 200, 80, 0.4)',
+    pass_y: 'rgba(255, 230, 80, 0.4)',
+    pass_b: 'rgba(80, 130, 255, 0.4)',
+    home_r: 'rgba(255, 50, 50, 0.3)',
+    home_g: 'rgba(50, 200, 50, 0.3)',
+    home_y: 'rgba(255, 220, 50, 0.3)',
+    home_b: 'rgba(50, 100, 255, 0.3)',
+};
+
+const MODE_LABELS = {
+    path: '', safe: 'S',
+    exit_r: 'ER', exit_g: 'EG', exit_y: 'EY', exit_b: 'EB',
+    pass_r: 'R', pass_g: 'G', pass_y: 'Y', pass_b: 'B',
+    home_r: 'HR', home_g: 'HG', home_y: 'HY', home_b: 'HB',
+};
+
+const MODE_NAMES = {
+    path: 'RECORRIDO', safe: 'SEGURAS',
+    exit_r: 'SALIDA ROJO', exit_g: 'SALIDA VERDE', exit_y: 'SALIDA AMARILLO', exit_b: 'SALIDA AZUL',
+    pass_r: 'PASILLO ROJO', pass_g: 'PASILLO VERDE', pass_y: 'PASILLO AMARILLO', pass_b: 'PASILLO AZUL',
+    home_r: 'CASA ROJO', home_g: 'CASA VERDE', home_y: 'CASA AMARILLO', home_b: 'CASA AZUL',
+};
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+canvas.width = MAP_W * SZ;
+canvas.height = MAP_H * SZ;
+
+async function init() {
+    const img = new Image();
+    img.src = 'tileset.png';
+    await new Promise(r => img.onload = r);
+    tilesetCanvas = document.createElement('canvas');
+    tilesetCanvas.width = img.width;
+    tilesetCanvas.height = img.height;
+    tilesetCanvas.getContext('2d').drawImage(img, 0, 0);
+
+    const resp = await fetch('screen_layout.json');
+    const layout = await resp.json();
+    screenMap = layout.tiles;
+    render();
+}
+
+function setMode(m) {
+    mode = m;
+    document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById('modeName').textContent = MODE_NAMES[m] || m;
+    document.getElementById('count').textContent = data[m].length;
+}
+
+function render() {
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const tilesPerRow = tilesetCanvas.width / TILE_SIZE;
+    for (let row = 0; row < MAP_H; row++) {
+        for (let col = 0; col < MAP_W; col++) {
+            const ti = screenMap[row * MAP_W + col];
+            if (ti === 0) continue;
+            const tx = (ti % tilesPerRow) * TILE_SIZE;
+            const ty = Math.floor(ti / tilesPerRow) * TILE_SIZE;
+            ctx.drawImage(tilesetCanvas, tx, ty, TILE_SIZE, TILE_SIZE, col * SZ, row * SZ, SZ, SZ);
+        }
+    }
+
+    // Grid
+    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.lineWidth = 0.5;
+    for (let x = 0; x <= MAP_W; x++) { ctx.beginPath(); ctx.moveTo(x*SZ,0); ctx.lineTo(x*SZ,canvas.height); ctx.stroke(); }
+    for (let y = 0; y <= MAP_H; y++) { ctx.beginPath(); ctx.moveTo(0,y*SZ); ctx.lineTo(canvas.width,y*SZ); ctx.stroke(); }
+
+    // Dibujar todas las capas
+    for (const key of Object.keys(data)) {
+        const arr = data[key];
+        const color = MODE_COLORS[key];
+        const label = MODE_LABELS[key];
+        const isHome = key.startsWith('home');
+        const showNum = (key === 'path' || key.startsWith('pass'));
+
+        for (let i = 0; i < arr.length; i++) {
+            const p = arr[i];
+            const x = p.col * SZ;
+            const y = p.row * SZ;
+            const w = (!isHome && p.dir === 'h') ? SZ * 2 : SZ;
+            const h = (!isHome && p.dir === 'v') ? SZ * 2 : SZ;
+
+            ctx.fillStyle = color;
+            ctx.fillRect(x+1, y+1, w-2, h-2);
+            ctx.strokeStyle = color.replace('0.', '0.9');
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(x+1, y+1, w-2, h-2);
+
+            ctx.fillStyle = '#fff';
+            ctx.font = `bold ${Math.floor(SZ*0.45)}px monospace`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            if (showNum)
+                ctx.fillText(String(i+1), x+w/2, y+h/2);
+            else if (label)
+                ctx.fillText(label, x+w/2, y+h/2);
+        }
+    }
+
+    document.getElementById('count').textContent = data[mode].length;
+}
+
+canvas.addEventListener('click', (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const col = Math.floor((e.clientX - rect.left) / SZ);
+    const row = Math.floor((e.clientY - rect.top) / SZ);
+    if (col < 0 || col >= MAP_W || row < 0 || row >= MAP_H) return;
+
+    const arr = data[mode];
+    const existing = arr.findIndex(p => p.col === col && p.row === row);
+    if (existing >= 0) return;
+
+    const isHome = mode.startsWith('home');
+    arr.push(isHome ? {col, row} : {col, row, dir: orientation});
+    render();
+    document.getElementById('status').textContent = `${MODE_NAMES[mode]} #${arr.length}: (${col},${row}) ${isHome ? '' : orientation === 'h' ? 'H' : 'V'}`;
+});
+
+canvas.addEventListener('contextmenu', (e) => { e.preventDefault(); undoLast(); });
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'o' || e.key === 'O') {
+        orientation = orientation === 'h' ? 'v' : 'h';
+        document.getElementById('orient').textContent = orientation === 'h' ? 'H' : 'V';
+    }
+    if (e.key === 'z' && e.ctrlKey) undoLast();
+});
+
+function undoLast() {
+    if (data[mode].length > 0) { data[mode].pop(); render(); }
+}
+
+function clearMode() {
+    data[mode] = [];
+    render();
+    document.getElementById('status').textContent = `${MODE_NAMES[mode]} borrado`;
+}
+
+function clearAll() {
+    for (const k of Object.keys(data)) data[k] = [];
+    render();
+}
+
+function exportAll() {
+    let s = '// Parchis — datos del tablero (auto-generado)\n\n';
+
+    // Recorrido
+    const p = data.path;
+    s += `#define PATH_LENGTH ${p.length}\n\n`;
+    s += `const u8 g_PathX[${p.length}] = { ${p.map(v=>v.col).join(',')} };\n`;
+    s += `const u8 g_PathY[${p.length}] = { ${p.map(v=>v.row).join(',')} };\n`;
+    s += `const u8 g_PathDir[${p.length}] = { ${p.map(v=>v.dir==='v'?1:0).join(',')} };\n\n`;
+
+    // Seguras (indices en el recorrido)
+    s += '// Casillas seguras (coordenadas tile)\n';
+    s += `#define SAFE_COUNT ${data.safe.length}\n`;
+    s += `const u8 g_SafeX[${data.safe.length||1}] = { ${data.safe.map(v=>v.col).join(',')||0} };\n`;
+    s += `const u8 g_SafeY[${data.safe.length||1}] = { ${data.safe.map(v=>v.row).join(',')||0} };\n\n`;
+
+    // Salidas
+    for (const c of ['r','g','y','b']) {
+        const e = data['exit_'+c];
+        const name = c.toUpperCase();
+        s += `// Salida ${name}\n`;
+        s += `const u8 g_Exit${name}X = ${e.length ? e[0].col : 0};\n`;
+        s += `const u8 g_Exit${name}Y = ${e.length ? e[0].row : 0};\n\n`;
+    }
+
+    // Pasillos
+    for (const c of ['r','g','y','b']) {
+        const pa = data['pass_'+c];
+        const name = c.toUpperCase();
+        s += `// Pasillo ${name} (${pa.length} casillas)\n`;
+        s += `const u8 g_Pass${name}X[${pa.length||1}] = { ${pa.map(v=>v.col).join(',')||0} };\n`;
+        s += `const u8 g_Pass${name}Y[${pa.length||1}] = { ${pa.map(v=>v.row).join(',')||0} };\n`;
+        s += `const u8 g_Pass${name}Dir[${pa.length||1}] = { ${pa.map(v=>v.dir==='v'?1:0).join(',')||0} };\n\n`;
+    }
+
+    // Casas
+    for (const c of ['r','g','y','b']) {
+        const h = data['home_'+c];
+        const name = c.toUpperCase();
+        s += `// Casa ${name} (${h.length} fichas)\n`;
+        s += `const u8 g_Home${name}X[${h.length||1}] = { ${h.map(v=>v.col).join(',')||0} };\n`;
+        s += `const u8 g_Home${name}Y[${h.length||1}] = { ${h.map(v=>v.row).join(',')||0} };\n\n`;
+    }
+
+    document.getElementById('output').value = s;
+}
+
+function saveJSON() {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'parchis_path.json';
+    a.click();
+    document.getElementById('status').textContent = 'JSON guardado';
+}
+
+function loadJSON() {
+    document.getElementById('fileInput').click();
+}
+
+function loadJSONFile(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+        data = JSON.parse(ev.target.result);
+        render();
+        document.getElementById('status').textContent = 'JSON cargado';
+    };
+    reader.readAsText(file);
+}
+
+init();
+</script>
+</body>
+</html>

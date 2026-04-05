@@ -1,0 +1,47 @@
+{
+  "seatNameCol": [
+    0,
+    0,
+    0,
+    24,
+    24,
+    24
+  ],
+  "seatNameRow": [
+    15,
+    10,
+    5,
+    5,
+    10,
+    15
+  ],
+  "seatCardCol": [
+    3,
+    2,
+    4,
+    24,
+    26,
+    25
+  ],
+  "seatCardRow": [
+    12,
+    7,
+    2,
+    2,
+    7,
+    12
+  ],
+  "communityCol": 11,
+  "communityRow": 8,
+  "myCardsCol": 13,
+  "myCardsRow": 18,
+  "hudRow": 0,
+  "actionsRow": 22,
+  "botTextRow": 2,
+  "botTextCol": 10,
+  "separatorRow": 16,
+  "tableTL_col": 9,
+  "tableTL_row": 6,
+  "tableBR_col": 22,
+  "tableBR_row": 12
+}

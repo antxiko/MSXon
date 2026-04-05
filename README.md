@@ -17,9 +17,11 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 
 | Juego | GAME_ID | Jugadores | Modo | Screen | Estado |
 |-------|---------|-----------|------|--------|--------|
-| **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | ✅ Funcional (MOL_038) |
-| **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | ✅ Funcional (DAM_013) |
-| **Burdyn RPG** | 0x03 | 14 | AGGREGATE | Screen 4 | ✅ Funcional (BURD_023) |
+| **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | ✅ Funcional (MOL_039) |
+| **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | ✅ Funcional (DAM_022) |
+| **Burdyn RPG** | 0x03 | 14 | AGGREGATE | Screen 4 | ✅ Funcional (BURD_024) |
+| **Parchis** | 0x04 | 4 | RELAY | Screen 4 | ✅ Funcional (PAR_011) |
+| **Texas Hold'em** | 0x05 | 6 | RELAY | Screen 4 | 🚧 En desarrollo (TEX_015) |
 
 ### Ball Demo (`client/`)
 Demo de sprites multijugador. Cada jugador mueve una bola por la pantalla en Screen 5 (bitmap). Hasta 4 jugadores por sala.
@@ -29,6 +31,12 @@ Juego de damas para 2 jugadores. Tablero cenital con fichas como sprites 16x16. 
 
 ### Burdyn RPG Crawler (`burdyn/`)
 RPG crawler multijugador para hasta 14 jugadores. Mapa 64x64 con scroll centrado, 83 tiles, HUD sidebar, inventario de 8 items. Incluye editor de mapas HTML.
+
+### Parchis Online (`parchis/`)
+Parchis clasico para 4 jugadores. Tablero con recorrido de 68 casillas, pasillos, casillas seguras, capturas, barreras. P1=Amarillo, P2=Azul, P3=Rojo, P4=Verde. Host arranca la partida.
+
+### Texas Hold'em Poker (`texas/`)
+Poker Texas Hold'em para hasta 6 jugadores. Cartas simplificadas con tiles reutilizables (valor+palo). Stack fijo 1000 fichas, ciegas 10/20. Dealer local con IA para testing offline. Evaluador de manos en Z80. Incluye editor de tiles y editor de layout HTML.
 
 ---
 
@@ -51,6 +59,14 @@ MSXonLINE/
 │   ├── burdyn.c
 │   ├── editor.html          Editor de mapas
 │   └── assets/              Mapas (.bin)
+├── parchis/             Parchis Online (GAME_ID=0x04)
+│   ├── path_editor.html     Editor visual del tablero
+│   ├── tileset.png          Tileset grafico
+│   └── screen_layout.json   Layout 32x24
+├── texas/               Texas Hold'em (GAME_ID=0x05)
+│   ├── tile_editor.html     Editor de tiles
+│   ├── table_editor.html    Editor de layout de mesa
+│   └── assets/              Tileset, layout JSON
 ├── tools/               Herramientas
 │   └── msxonline-cli/       TUI en Rust para gestionar el servidor
 ├── build/
@@ -67,7 +83,7 @@ MSXonLINE/
 **IP**: 217.154.107.144:9876
 
 Dos modos de sala:
-- **RELAY**: reenvía STATE_UPDATE a todos (Ball Demo, Damas)
+- **RELAY**: reenvía STATE_UPDATE a todos (Ball Demo, Damas, Parchis, Texas)
 - **AGGREGATE**: almacena estados, envía WORLD_STATE a 10Hz (Burdyn)
 
 ```bash
@@ -93,6 +109,8 @@ Requiere [MSXgl](https://github.com/aoineko-fr/MSXgl) y SDCC 4.5.0.
 cd MSXgl/projects/msxonline && bash build.sh    # Ball Demo
 cd MSXgl/projects/damas && bash build.sh        # Damas
 cd MSXgl/projects/burdyn && bash build.sh       # Burdyn
+cd MSXgl/projects/parchis && bash build.sh      # Parchis
+cd MSXgl/projects/texas && bash build.sh        # Texas Hold'em
 ```
 
 **IMPORTANTE**: `ForceRamAddr = 0x8000` en `project_config.js` es obligatorio para evitar conflictos UNAPI.

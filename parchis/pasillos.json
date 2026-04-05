@@ -1,0 +1,40 @@
+{
+  "path": [],
+  "safe": [],
+  "exit_r": [],
+  "exit_g": [],
+  "exit_y": [],
+  "exit_b": [],
+  "pass_r": [
+    {
+      "col": 15,
+      "row": 3,
+      "dir": "h"
+    }
+  ],
+  "pass_g": [
+    {
+      "col": 7,
+      "row": 11,
+      "dir": "v"
+    }
+  ],
+  "pass_y": [
+    {
+      "col": 15,
+      "row": 20,
+      "dir": "h"
+    }
+  ],
+  "pass_b": [
+    {
+      "col": 24,
+      "row": 11,
+      "dir": "v"
+    }
+  ],
+  "home_r": [],
+  "home_g": [],
+  "home_y": [],
+  "home_b": []
+}
