@@ -21,8 +21,8 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 | **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | ✅ Funcional (DAM_022) |
 | **Burdyn RPG** | 0x03 | 14 | RELAY | Screen 4 | ✅ Funcional (BURD_029) |
 | **Parchis** | 0x04 | 4 | RELAY | Screen 4 | ✅ Funcional (PAR_011) |
-| **Texas Hold'em** | 0x05 | 6 | RELAY | Screen 4 | ✅ Funcional (TEX_023) |
-| **Tetris 4P** | 0x06 | 4 | RELAY | Screen 4 | ✅ Funcional (TET_021) |
+| **Texas Hold'em** | 0x05 | 6 | RELAY | Screen 4 | ✅ Funcional (TEX_030) |
+| **Tetris 4P** | 0x06 | 4 | RELAY | Screen 4 | ✅ Funcional (TET_024) |
 | **Among MSX** | 0x07 | 4-8 | RELAY | Screen 4 | 🚧 En desarrollo (AMG_001) |
 
 ### Ball Demo (`client/`)
@@ -68,6 +68,9 @@ MSXonLINE/
 │   ├── path_editor.html     Editor visual del tablero
 │   ├── tileset.png          Tileset grafico
 │   └── screen_layout.json   Layout 32x24
+├── lobby/               Modulo lobby universal compartido
+│   ├── lobby.h              API publica
+│   └── lobby.c              Implementacion (diag, connect, rooms)
 ├── tetris/              Tetris 4P (GAME_ID=0x06)
 │   └── tetris.c
 ├── texas/               Texas Hold'em (GAME_ID=0x05)

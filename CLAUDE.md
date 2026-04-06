@@ -232,7 +232,7 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
-## TEXAS HOLD'EM (TEX_023)
+## TEXAS HOLD'EM (TEX_030)
 
 - Screen 4 (Graphic 3, 32x24 tiles)
 - Poker Texas Hold'em hasta 6 jugadores humanos
@@ -248,7 +248,7 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
-## TETRIS 4P (TET_021)
+## TETRIS 4P (TET_024)
 
 - Screen 4 (Graphic 3, 32x24 tiles)
 - Tetris competitivo a 4 jugadores, 8 columnas por tablero
