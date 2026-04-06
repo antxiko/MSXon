@@ -390,7 +390,7 @@ function startBurdynGhost(ghostNum) {
     // Movimiento: rebote diagonal por el mapa 64x64
     interval = setInterval(() => {
         pingCounter++;
-        if (pingCounter >= 10) {
+        if (pingCounter >= 38) { // ~5 seconds at 133ms
             pingCounter = 0;
             if (!sock.destroyed) sock.write(buildPacket(CMD.PING, roomId, pid));
         }
@@ -405,7 +405,7 @@ function startBurdynGhost(ghostNum) {
 
         const pl = Buffer.from([x, y, 0, 100, 0, 0, 1, 0]);
         if (!sock.destroyed) sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, pl));
-    }, 250); // 4 FPS
+    }, 133); // ~7-8 moves/sec (matches MSX MOVE_JIFFIES=8)
 }
 
 // =============================================================================
@@ -750,13 +750,161 @@ function startTetrisGhost(ghostNum) {
     }, 500); // 2 ticks per second
 }
 
+// =============================================================================
+// POKER GHOST — bot que se une a salas de poker y juega
+// =============================================================================
+
+const GAME_ID_POKER = 0x05;
+
+function startPokerGhost() {
+    const log = (msg) => console.log(`[POKER-BOT] ${msg}`);
+    const sock = new net.Socket();
+    let recvBuf = Buffer.alloc(0);
+    let roomId = 0, pid = 0;
+    let interval = null, pingCounter = 0;
+    let myCards = [0, 0];
+    let gameStarted = false;
+    let myTurn = false;
+    let currentBet = 0;
+
+    // Simple AI: decide based on cards
+    function cardStrength(c) {
+        const v = c & 0x0F;
+        return (v === 1) ? 14 : v; // Ace = 14
+    }
+
+    function decide() {
+        const s1 = cardStrength(myCards[0]);
+        const s2 = cardStrength(myCards[1]);
+        const best = Math.max(s1, s2);
+        const pair = (s1 === s2);
+        const r = Math.random();
+
+        if (pair && best >= 10) return { action: 3, amount: 40 }; // raise
+        if (pair) return { action: (r < 0.5) ? 3 : 2, amount: 20 }; // raise or call
+        if (best >= 12) return { action: (currentBet > 0) ? 2 : 1, amount: 0 }; // call or check
+        if (best >= 8) {
+            if (currentBet > 0) return (r < 0.6) ? { action: 2, amount: 0 } : { action: 0, amount: 0 };
+            return { action: 1, amount: 0 }; // check
+        }
+        // Weak hand
+        if (currentBet > 0) return (r < 0.3) ? { action: 2, amount: 0 } : { action: 0, amount: 0 };
+        return { action: 1, amount: 0 }; // check
+    }
+
+    sock.connect(SERVER_PORT, SERVER_IP, () => {
+        log('Conectado');
+        sock.write(buildPacket(CMD.AUTH, 0, 0, AUTH_TOKEN));
+    });
+
+    sock.on('data', (chunk) => {
+        recvBuf = Buffer.concat([recvBuf, chunk]);
+
+        while (recvBuf.length >= 6) {
+            let magicPos = -1;
+            for (let i = 0; i <= recvBuf.length - 2; i++) {
+                if (recvBuf[i] === 0x46 && recvBuf[i+1] === 0x4D) { magicPos = i; break; }
+            }
+            if (magicPos < 0) { recvBuf = Buffer.alloc(0); break; }
+            if (magicPos > 0) recvBuf = recvBuf.slice(magicPos);
+            if (recvBuf.length < 6) break;
+
+            const cmd = recvBuf[2];
+            const payloadLen = recvBuf[5];
+            const totalLen = 6 + payloadLen;
+            if (recvBuf.length < totalLen) break;
+
+            const payload = recvBuf.slice(6, totalLen);
+            recvBuf = recvBuf.slice(totalLen);
+
+            if (cmd === CMD.AUTH_OK) {
+                log('Auth OK');
+                // Create poker room
+                sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0,
+                    Buffer.from([GAME_ID_POKER, 6, 0x01])));
+            }
+            else if (cmd === 0x23) { // ROOM_INFO
+                roomId = payload[0];
+                pid = payload[3];
+                log(`Sala ${roomId}, PID ${pid}`);
+            }
+            else if (cmd === 0x30) { // PLAYER_JOINED
+                const joinedPid = payload[0];
+                log(`Player joined PID ${joinedPid}`);
+                // When a human joins (PID 2+), wait 3s and start
+                if (pid === 1 && joinedPid >= 2 && !gameStarted) {
+                    log('Humano conectado! Empezando en 3s...');
+                    setTimeout(() => {
+                        if (!sock.destroyed && !gameStarted) {
+                            sock.write(buildPacket(0x32, roomId, pid));
+                            gameStarted = true;
+                            log('GAME_START enviado');
+                        }
+                    }, 3000);
+                }
+            }
+            else if (cmd === 0x32) { // GAME_START
+                gameStarted = true;
+                log('Partida iniciada');
+            }
+            else if (cmd === CMD.STATE_UPDATE && payloadLen >= 1) {
+                const pkt = payload[0];
+
+                if (pkt === 0x02 && payloadLen >= 3) { // DEAL_HOLE
+                    myCards[0] = payload[1];
+                    myCards[1] = payload[2];
+                    log(`Cartas: ${myCards[0]} ${myCards[1]}`);
+                }
+                else if (pkt === 0x04 && payloadLen >= 8) { // ACTION_PROMPT
+                    const actionSeat = payload[1];
+                    currentBet = (payload[2] << 8) | payload[3];
+                    if (actionSeat === pid - 1) {
+                        myTurn = true;
+                        // Respond after short delay
+                        setTimeout(() => {
+                            if (!sock.destroyed && myTurn) {
+                                const d = decide();
+                                const pl = Buffer.from([d.action, (d.amount >> 8) & 0xFF, d.amount & 0xFF]);
+                                sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, pl));
+                                myTurn = false;
+                                log(`Accion: ${['FOLD','CHECK','CALL','RAISE','ALLIN'][d.action]}`);
+                            }
+                        }, 1000 + Math.floor(Math.random() * 2000));
+                    }
+                }
+            }
+        }
+    });
+
+    sock.on('error', (err) => {
+        if (err.code !== 'ECONNRESET') log(`Error: ${err.message}`);
+    });
+
+    sock.on('close', () => {
+        log('Desconectado. Reconectando en 5s...');
+        if (interval) clearInterval(interval);
+        gameStarted = false;
+        myTurn = false;
+        setTimeout(() => startPokerGhost(), 5000);
+    });
+
+    // Ping
+    interval = setInterval(() => {
+        pingCounter++;
+        if (pingCounter >= 30) {
+            pingCounter = 0;
+            if (!sock.destroyed) sock.write(buildPacket(CMD.PING, roomId, pid));
+        }
+    }, 500);
+}
+
 // ── Arranque ──────────────────────────────────────────────────
 
 const NUM_BURDYN = parseInt(process.argv[2] || '3', 10);
 const NUM_TETRIS = parseInt(process.argv[3] || '3', 10);
 
-console.log('MSX Online Ghost Service v1.1');
-console.log(`Iniciando: 1 ghost damas + ${NUM_BURDYN} ghost(s) burdyn + ${NUM_TETRIS} ghost(s) tetris\n`);
+console.log('MSX Online Ghost Service v1.2');
+console.log(`Iniciando: 1 ghost damas + ${NUM_BURDYN} ghost(s) burdyn + ${NUM_TETRIS} ghost(s) tetris + 1 ghost poker\n`);
 startDamasGhost();
 
 // Burdyn ghosts
@@ -774,7 +922,7 @@ for (let i = 1; i < NUM_BURDYN; i++) {
 
 // Tetris ghosts
 setTimeout(() => {
-    startTetrisGhost(0); // Ghost #0 creates room
+    startTetrisGhost(0);
     for (let i = 1; i < NUM_TETRIS; i++) {
         setTimeout(() => {
             if (tetrisRoomId > 0) {
@@ -785,4 +933,9 @@ setTimeout(() => {
             }
         }, 3000 + i * 1500);
     }
-}, 8000); // Start tetris ghosts 8s after burdyn
+}, 8000);
+
+// Poker ghost
+setTimeout(() => {
+    startPokerGhost();
+}, 12000);

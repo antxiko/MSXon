@@ -1,6 +1,6 @@
 # MSX ONLINE — Contexto del proyecto para Claude
-# Ultima actualizacion: 2026-04-05
-# Estado: 4 juegos online — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_024), Parchis (PAR_011)
+# Ultima actualizacion: 2026-04-06
+# Estado: 7 juegos — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_029), Parchis (PAR_011), Texas (TEX_020), Tetris (TET_021), Among (AMG_001)
 
 ---
 
@@ -8,11 +8,14 @@
 
 Plataforma de juegos online para MSX reales (Z80) con cinco componentes:
 
-1. **Servidor Node.js** (`server/msx-gameserver.js`) — gestiona salas, relay + aggregation
+1. **Servidor Node.js** (`server/msx-gameserver.js`) — gestiona salas, relay, game handlers
 2. **Ball Demo** (`client/`) — demo de sprites multijugador en Screen 5 (GAME_ID=0x01)
 3. **Damas** (`damas/`) — damas online 2 jugadores en Screen 4 (GAME_ID=0x02)
 4. **Burdyn** (`burdyn/`) — RPG crawler multijugador en Screen 4 (GAME_ID=0x03)
 5. **Parchis** (`parchis/`) — parchis online 4 jugadores en Screen 4 (GAME_ID=0x04)
+6. **Texas Hold'em** (`texas/`) — poker online hasta 6 jugadores, dealer server-side (GAME_ID=0x05)
+7. **Tetris 4P** (`tetris/`) — tetris competitivo 4 jugadores con garbage (GAME_ID=0x06)
+8. **Among MSX** (`among/`) — impostor online 4-8 jugadores (GAME_ID=0x07, en desarrollo)
 
 Codigo compartido en `shared/`: network.h, protocol.h, log.h
 
@@ -31,9 +34,12 @@ Codigo compartido en `shared/`: network.h, protocol.h, log.h
 MSXonLINE/                           <-- Repo GitHub (antxiko/MSXonLINE)
 |
 |-- server/
-|   |-- msx-gameserver.js            <-- Servidor TCP (relay + aggregate)
+|   |-- msx-gameserver.js            <-- Servidor TCP (relay + game handlers)
 |   |-- server-status.js             <-- Monitor interactivo + ghost player
 |   |-- ghost-service.js             <-- Ghosts persistentes en VPS
+|   |-- game-handlers/
+|   |   |-- index.js                 <-- Registro de handlers por GAME_ID
+|   |   +-- poker-handler.js         <-- Dealer de Texas Hold'em (server-side)
 |   |-- update.sh                    <-- Script de actualizacion VPS
 |   +-- msx-server.service           <-- Unidad systemd
 |
@@ -194,7 +200,7 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
-## BURDYN RPG (BURD_024)
+## BURDYN RPG (BURD_029)
 
 - Screen 4 (Graphic 3, 32x24 tiles)
 - Mapa 64x64 cargado desde BURDYN.MAP
@@ -226,6 +232,48 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
+## TEXAS HOLD'EM (TEX_020)
+
+- Screen 4 (Graphic 3, 32x24 tiles)
+- Poker Texas Hold'em hasta 6 jugadores humanos
+- Cliente puro: sin dealer local, sin IA, sin evaluador de manos
+- El servidor es el dealer (game-handlers/poker-handler.js)
+- Cartas simplificadas 2x3 tiles (valor+palo reutilizables)
+- Stack fijo 1000 fichas, ciegas 10/20
+- 4 rondas de apuestas: pre-flop, flop, turn, river
+- Cartas privadas enviadas individualmente por el servidor
+- Ghost bot en servidor para jugar solo
+- table_editor.html y tile_editor.html para diseño visual
+- GAME_ID = 0x05, modo RELAY
+
+---
+
+## TETRIS 4P (TET_021)
+
+- Screen 4 (Graphic 3, 32x24 tiles)
+- Tetris competitivo a 4 jugadores, 8 columnas por tablero
+- Shadow buffer: solo redibuja celdas que cambian (targeted draw)
+- Full board sync empaquetado (86 bytes) cada 5 frames
+- Garbage: 2 lineas=1, 3=2, tetris=4 filas, gap determinístico
+- Targeting con SPACE (elige a quien atacar, sprite flecha)
+- Ghost bots con IA en servidor (evalua posiciones)
+- JIFFY counter para velocidad uniforme entre MSX
+- GAME_ID = 0x06, modo RELAY
+
+---
+
+## AMONG MSX (AMG_001, en desarrollo)
+
+- Screen 4 (Graphic 3, 32x24 tiles)
+- Among Us simplificado, 4-8 jugadores, 1 impostor
+- 7 habitaciones separadas (pantallas completas, sin scroll)
+- Puertas para cambiar de habitacion
+- Interruptores: impostor sabotea, inocentes arreglan
+- Solo ves jugadores en tu habitacion
+- GAME_ID = 0x07, modo RELAY
+
+---
+
 ## REGLAS PARA CLAUDE
 
 1. **NUNCA tocar conectividad cuando se piden cambios de UI** — rompe la conexion
@@ -233,7 +281,7 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 3. **NUNCA restaurar desde repo sin re-aplicar fixes de network.h** — g_ConnResult, flush
 4. **"Cliente" = MSX siempre** — nunca PC client salvo que se diga explicitamente
 5. **ForceRamAddr = 0x8000 siempre** en project_config.js
-6. **Builds versionadas**: MOL_XXX, DAM_XXX, BURD_XXX, PAR_XXX — max 5 copias cada una
+6. **Builds versionadas**: MOL_XXX, DAM_XXX, BURD_XXX, PAR_XXX, TEX_XXX, TET_XXX, AMG_XXX — max 5 copias
 7. **SDCC: variables al inicio de funcion**, no declarar dentro de for/if
 
 ---

@@ -309,6 +309,8 @@ function handlePacket(socket, state, { cmd, payload }) {
         CMD.ROOM_INFO, roomId, pid,
         Buffer.from([roomId, gameId, 1, pid])
       ));
+      if (room.handler && room.handler.onPlayerJoined)
+        room.handler.onPlayerJoined(room, pid);
       break;
     }
 

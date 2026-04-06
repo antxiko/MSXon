@@ -19,10 +19,11 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 |-------|---------|-----------|------|--------|--------|
 | **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | ✅ Funcional (MOL_039) |
 | **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | ✅ Funcional (DAM_022) |
-| **Burdyn RPG** | 0x03 | 14 | RELAY | Screen 4 | ✅ Funcional (BURD_025) |
+| **Burdyn RPG** | 0x03 | 14 | RELAY | Screen 4 | ✅ Funcional (BURD_029) |
 | **Parchis** | 0x04 | 4 | RELAY | Screen 4 | ✅ Funcional (PAR_011) |
-| **Texas Hold'em** | 0x05 | 6 | RELAY | Screen 4 | 🚧 En desarrollo (TEX_015) |
+| **Texas Hold'em** | 0x05 | 6 | RELAY | Screen 4 | ✅ Funcional (TEX_020) |
 | **Tetris 4P** | 0x06 | 4 | RELAY | Screen 4 | ✅ Funcional (TET_021) |
+| **Among MSX** | 0x07 | 4-8 | RELAY | Screen 4 | 🚧 En desarrollo (AMG_001) |
 
 ### Ball Demo (`client/`)
 Demo de sprites multijugador. Cada jugador mueve una bola por la pantalla en Screen 5 (bitmap). Hasta 4 jugadores por sala.
@@ -37,7 +38,10 @@ RPG crawler multijugador para hasta 14 jugadores. Mapa 64x64 con scroll centrado
 Parchis clasico para 4 jugadores. Tablero con recorrido de 68 casillas, pasillos, casillas seguras, capturas, barreras. P1=Amarillo, P2=Azul, P3=Rojo, P4=Verde. Host arranca la partida.
 
 ### Texas Hold'em Poker (`texas/`)
-Poker Texas Hold'em para hasta 6 jugadores. Cartas simplificadas con tiles reutilizables (valor+palo). Stack fijo 1000 fichas, ciegas 10/20. Dealer local con IA para testing offline. Evaluador de manos en Z80. Incluye editor de tiles y editor de layout HTML.
+Poker Texas Hold'em para hasta 6 jugadores. Cartas simplificadas con tiles reutilizables (valor+palo). Stack fijo 1000 fichas, ciegas 10/20. El servidor es el dealer (game-handlers/poker-handler.js) — baraja, reparte cartas privadas, gestiona rondas de apuestas, evalua manos. El MSX solo muestra UI y envia acciones. Ghost bot en el servidor para jugar solo.
+
+### Among MSX (`among/`)
+Among Us simplificado para 4-8 jugadores. 7 habitaciones separadas (pantallas completas 32x24). Movimiento con cursores, cambio de habitacion por puertas. 1 impostor vs inocentes. Sistemas que sabotear/arreglar. En desarrollo.
 
 ---
 
@@ -64,10 +68,15 @@ MSXonLINE/
 │   ├── path_editor.html     Editor visual del tablero
 │   ├── tileset.png          Tileset grafico
 │   └── screen_layout.json   Layout 32x24
+├── tetris/              Tetris 4P (GAME_ID=0x06)
+│   └── tetris.c
 ├── texas/               Texas Hold'em (GAME_ID=0x05)
+│   ├── texas.c
 │   ├── tile_editor.html     Editor de tiles
 │   ├── table_editor.html    Editor de layout de mesa
 │   └── assets/              Tileset, layout JSON
+├── among/               Among MSX (GAME_ID=0x07)
+│   └── among.c
 ├── tools/               Herramientas
 │   └── msxonline-cli/       TUI en Rust para gestionar el servidor
 ├── build/

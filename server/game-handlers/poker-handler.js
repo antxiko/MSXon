@@ -169,10 +169,23 @@ function startNewHand(room) {
         gs.seats[i].inHand = gs.seats[i].chips > 0;
     }
 
+    // Need at least 2 active players
+    if (countInHand(gs) < 2) {
+        console.log(`[POKER] Sala ${room.id}: no hay suficientes jugadores`);
+        gs.phase = 'waiting';
+        return;
+    }
+
     // Dealer rotation
     gs.dealerSeat = nextActiveSeat(gs, gs.dealerSeat);
     let sbSeat = nextActiveSeat(gs, gs.dealerSeat);
     let bbSeat = nextActiveSeat(gs, sbSeat);
+
+    if (!gs.seats[gs.dealerSeat] || !gs.seats[sbSeat] || !gs.seats[bbSeat]) {
+        console.log(`[POKER] Sala ${room.id}: seats invalidos`);
+        gs.phase = 'waiting';
+        return;
+    }
 
     // Heads-up: dealer = SB
     if (countInHand(gs) === 2) {

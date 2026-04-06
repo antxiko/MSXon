@@ -4,9 +4,9 @@ Poker Texas Hold'em para MSX2 con hasta 6 jugadores. GAME_ID = 0x05.
 
 ## Estado
 
-- **Build actual**: TEX_015
-- **Modo**: Dealer local (offline) con 5 bots IA
-- **Futuro**: Ghost dealer en servidor para online
+- **Build actual**: TEX_020
+- **Modo**: Cliente puro — servidor es el dealer
+- **Ghost**: Bot de poker en servidor para jugar solo
 
 ## Caracteristicas
 
@@ -14,10 +14,11 @@ Poker Texas Hold'em para MSX2 con hasta 6 jugadores. GAME_ID = 0x05.
 - Cartas simplificadas 2x3 tiles (valor + palo reutilizables)
 - Stack fijo: 1000 fichas, ciegas 10/20
 - 4 rondas de apuestas: pre-flop, flop, turn, river
-- Evaluador de manos en Z80 (flush, straight, full house, etc.)
-- IA simple basada en fuerza de mano
-- Reglas: fold, check, call, raise, all-in, 3 seises pierde ficha
-- Pantalla de inicio con entropia aleatoria
+- Servidor evalua manos (game-handlers/poker-handler.js)
+- Cartas privadas enviadas individualmente a cada jugador
+- Reglas: fold, check, call, raise, all-in
+- Ghost bot con IA simple en el servidor
+- 30 segundos timeout por accion (auto-fold)
 
 ## Codificacion de cartas
 
