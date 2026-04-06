@@ -57,6 +57,14 @@ const ROOM_MODE_RELAY     = 0;  // Relay puro (legacy, Ball Demo actual)
 const ROOM_MODE_AGGREGATE = 1;  // Servidor agrega estado (WORLD_STATE)
 const DEFAULT_TICK_MS     = 100; // 10Hz por defecto
 
+// ── Game Handlers (lógica server-side por GAME_ID) ────────────
+let gameHandlers;
+try {
+  gameHandlers = require('./game-handlers');
+} catch(e) {
+  gameHandlers = new Map(); // Sin handlers: relay puro para todos
+}
+
 // ── Estado global ──────────────────────────────────────────────
 // rooms: Map<roomId, { gameId, maxPlayers, mode, tickMs, tickInterval, tickSeq, players }>
 // players: Map<pid, { socket, state: Buffer|null, lastUpdate: number }>
@@ -85,6 +93,20 @@ function broadcastToRoom(room, excludePid, packet) {
   }
 }
 
+function sendToPlayer(room, pid, packet) {
+  const pdata = room.players.get(pid);
+  if (pdata && pdata.socket && !pdata.socket.destroyed)
+    pdata.socket.write(packet);
+}
+
+function serverBroadcast(room, cmd, payload) {
+  const packet = buildPacket(cmd, room.id || 0, 0, payload);
+  broadcastToRoom(room, null, packet);
+}
+
+// API object passed to game handlers
+const handlerApi = { sendToPlayer, serverBroadcast, buildPacket, broadcastToRoom };
+
 function createRoom(gameId, maxPlayers, mode) {
   // Reusar el primer ID libre (1..255)
   let id = null;
@@ -92,7 +114,9 @@ function createRoom(gameId, maxPlayers, mode) {
     if (!rooms.has(i)) { id = i; break; }
   }
   if (id === null) return null; // 255 salas llenas
-  rooms.set(id, {
+  const handler = gameHandlers.get ? (gameHandlers.get(gameId) || null) : null;
+  const room = {
+    id,
     gameId,
     maxPlayers,
     mode:         mode || ROOM_MODE_RELAY,
@@ -101,7 +125,12 @@ function createRoom(gameId, maxPlayers, mode) {
     tickSeq:      0,
     gameStarted:  false,
     players:      new Map(),
-  });
+    handler,
+    gameState:    {},
+  };
+  rooms.set(id, room);
+  if (handler && handler.onRoomCreated)
+    handler.onRoomCreated(room, handlerApi);
   return id;
 }
 
@@ -208,6 +237,8 @@ function leaveRoom(socket, state) {
   const room = rooms.get(state.roomId);
   if (!room) return;
 
+  if (room.handler && room.handler.onPlayerLeft)
+    room.handler.onPlayerLeft(room, state.pid);
   room.players.delete(state.pid);
   console.log(`[${socket.remoteAddress}] Abandona sala ${state.roomId} (P${state.pid})`);
 
@@ -300,6 +331,8 @@ function handlePacket(socket, state, { cmd, payload }) {
         CMD.ROOM_INFO, roomId, pid,
         Buffer.from([roomId, room.gameId, room.players.size, pid])
       ));
+      if (room.handler && room.handler.onPlayerJoined)
+        room.handler.onPlayerJoined(room, pid);
       break;
     }
 
@@ -328,6 +361,11 @@ function handlePacket(socket, state, { cmd, payload }) {
       const room = rooms.get(state.roomId);
       if (!room) break;
 
+      // Game handler hook: puede consumir el paquete
+      if (room.handler && room.handler.onStateUpdate) {
+        if (room.handler.onStateUpdate(room, state.pid, payload)) break;
+      }
+
       if (room.mode === ROOM_MODE_AGGREGATE) {
         // Almacenar estado del jugador — el tick lo enviará agregado
         const pdata = room.players.get(state.pid);
@@ -336,7 +374,7 @@ function handlePacket(socket, state, { cmd, payload }) {
           pdata.lastUpdate = Date.now();
         }
       } else {
-        // Relay puro (legacy)
+        // Relay puro
         const relay = buildPacket(CMD.STATE_UPDATE, state.roomId, state.pid, payload);
         broadcastToRoom(room, state.pid, relay);
       }
@@ -354,6 +392,8 @@ function handlePacket(socket, state, { cmd, payload }) {
       if (room.mode === ROOM_MODE_AGGREGATE) {
         startRoomTick(state.roomId);
       }
+      if (room.handler && room.handler.onGameStart)
+        room.handler.onGameStart(room);
       break;
     }
 
