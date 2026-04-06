@@ -141,7 +141,7 @@ static void NB_Text(u8 x, u8 y, const c8* s) {
         else if(ch=='/') t=T_SLASH;
         else if(ch=='-') t=T_DASH;
         else if(ch=='>') t=T_SEP;
-        else t=T_SPC;
+        else t=T_BLK;
         NB_SET(x,y,t); x++; s++;
     }
 }
@@ -496,8 +496,9 @@ void Net_ProcessPacket(u8 cmd, u8 senderPid, u8* pl, u8 len) {
     else if(cmd==CMD_GAME_START) {
         u16 si;
         for(si=0;si<768;si++) g_NB[si]=T_BLK;
+        Halt(); NB_Flush(); // flush black screen first
         Board_Draw();
-        g_FullFlush=TRUE;
+        Halt(); NB_Flush(); // flush board
         g_GS=GS_PLAYING;
     }
     else if(cmd==CMD_STATE_UPDATE && len>=1) {
@@ -684,6 +685,7 @@ void main(void) {
         // ── WAITING ──
         else if(g_GS==GS_WAITING){
             Net_Poll();
+            if(g_GS!=GS_WAITING) continue; // state changed in Net_Poll
             NB_Text(6,8,"SALA:"); NB_Num(12,8,g_RoomId);
             NB_Text(6,10,"TU ERES P"); NB_SET(15,10,T_F0+g_MyPid);
             NB_Text(6,12,"ESPERANDO JUGADORES");

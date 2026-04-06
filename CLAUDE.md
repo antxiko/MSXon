@@ -232,7 +232,7 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
-## TEXAS HOLD'EM (TEX_020)
+## TEXAS HOLD'EM (TEX_023)
 
 - Screen 4 (Graphic 3, 32x24 tiles)
 - Poker Texas Hold'em hasta 6 jugadores humanos

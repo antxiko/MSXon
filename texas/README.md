@@ -4,7 +4,7 @@ Poker Texas Hold'em para MSX2 con hasta 6 jugadores. GAME_ID = 0x05.
 
 ## Estado
 
-- **Build actual**: TEX_020
+- **Build actual**: TEX_023
 - **Modo**: Cliente puro — servidor es el dealer
 - **Ghost**: Bot de poker en servidor para jugar solo
 

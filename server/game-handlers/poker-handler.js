@@ -511,6 +511,20 @@ module.exports = {
 
     onGameStart(room) {
         console.log(`[POKER] Sala ${room.id}: partida iniciada`);
+        // Reset all seats for new game
+        const gs = room.gameState;
+        for (let i = 0; i < gs.maxSeats; i++) {
+            if (gs.seats[i]) {
+                gs.seats[i].chips = 1000;
+                gs.seats[i].inHand = false;
+                gs.seats[i].allIn = false;
+                gs.seats[i].folded = false;
+            }
+        }
+        gs.handNum = 0;
+        gs.dealerSeat = 0;
+        gs.phase = 'waiting';
+        if (gs.actionTimeout) { clearTimeout(gs.actionTimeout); gs.actionTimeout = null; }
         setTimeout(() => startNewHand(room), 1000);
     },
 

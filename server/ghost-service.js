@@ -832,12 +832,14 @@ function startPokerGhost() {
                 const joinedPid = payload[0];
                 log(`Player joined PID ${joinedPid}`);
                 // When a human joins (PID 2+), wait 3s and start
-                if (pid === 1 && joinedPid >= 2 && !gameStarted) {
+                if (pid === 1 && joinedPid >= 2) {
                     log('Humano conectado! Empezando en 3s...');
+                    gameStarted = false;
                     setTimeout(() => {
-                        if (!sock.destroyed && !gameStarted) {
+                        if (!sock.destroyed) {
                             sock.write(buildPacket(0x32, roomId, pid));
                             gameStarted = true;
+                            myCards = [0, 0];
                             log('GAME_START enviado');
                         }
                     }, 3000);

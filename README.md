@@ -21,7 +21,7 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 | **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | ✅ Funcional (DAM_022) |
 | **Burdyn RPG** | 0x03 | 14 | RELAY | Screen 4 | ✅ Funcional (BURD_029) |
 | **Parchis** | 0x04 | 4 | RELAY | Screen 4 | ✅ Funcional (PAR_011) |
-| **Texas Hold'em** | 0x05 | 6 | RELAY | Screen 4 | ✅ Funcional (TEX_020) |
+| **Texas Hold'em** | 0x05 | 6 | RELAY | Screen 4 | ✅ Funcional (TEX_023) |
 | **Tetris 4P** | 0x06 | 4 | RELAY | Screen 4 | ✅ Funcional (TET_021) |
 | **Among MSX** | 0x07 | 4-8 | RELAY | Screen 4 | 🚧 En desarrollo (AMG_001) |
 
