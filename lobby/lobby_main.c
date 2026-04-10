@@ -640,10 +640,13 @@ void main(void)
                     g_SendBuf[2]=CMD_ROOM_LEAVE; g_SendBuf[3]=g_RoomId;
                     g_SendBuf[4]=g_MyPid; g_SendBuf[5]=0;
                     Net_Send(g_Conn, g_SendBuf, 6);
-                    // Back to lobby
-                    SendRoomList();
-                    g_State = ST_CONNECTING;
+                    // Disconnect and back to game selector
+                    Net_Close(g_Conn);
+                    g_Conn = NET_INVALID_CONN;
+                    g_Online = FALSE;
+                    g_State = ST_MENU;
                     waitDrawn = 0;
+                    DrawMenu();
                     g_KeyDly = 15;
                 }
             }
