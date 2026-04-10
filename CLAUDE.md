@@ -1,23 +1,25 @@
 # MSX ONLINE — Contexto del proyecto para Claude
-# Ultima actualizacion: 2026-04-06
-# Estado: 7 juegos — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_029), Parchis (PAR_011), Texas (TEX_020), Tetris (TET_021), Among (AMG_001)
+# Ultima actualizacion: 2026-04-10
+# Estado: 8 juegos + LOBBY.COM — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_029), Parchis (PAR_011), Texas (TEX_030), Tetris (TET_024), Among (AMG_001), Frog & Flies (FRG_012)
 
 ---
 
 ## QUE ES ESTE PROYECTO
 
-Plataforma de juegos online para MSX reales (Z80) con cinco componentes:
+Plataforma de juegos online para MSX reales (Z80) con estos componentes:
 
-1. **Servidor Node.js** (`server/msx-gameserver.js`) — gestiona salas, relay, game handlers
-2. **Ball Demo** (`client/`) — demo de sprites multijugador en Screen 5 (GAME_ID=0x01)
-3. **Damas** (`damas/`) — damas online 2 jugadores en Screen 4 (GAME_ID=0x02)
-4. **Burdyn** (`burdyn/`) — RPG crawler multijugador en Screen 4 (GAME_ID=0x03)
-5. **Parchis** (`parchis/`) — parchis online 4 jugadores en Screen 4 (GAME_ID=0x04)
-6. **Texas Hold'em** (`texas/`) — poker online hasta 6 jugadores, dealer server-side (GAME_ID=0x05)
-7. **Tetris 4P** (`tetris/`) — tetris competitivo 4 jugadores con garbage (GAME_ID=0x06)
-8. **Among MSX** (`among/`) — impostor online 4-8 jugadores (GAME_ID=0x07, en desarrollo)
+1. **LOBBY.COM** (`lobby/`) — lobby universal standalone, Screen 0, selector de juegos, connect/auth/salas/waiting
+2. **Servidor Node.js** (`server/msx-gameserver.js`) — gestiona salas, relay, game handlers
+3. **Ball Demo** (`client/`) — demo de sprites multijugador en Screen 5 (GAME_ID=0x01)
+4. **Damas** (`damas/`) — damas online 2 jugadores en Screen 4 (GAME_ID=0x02)
+5. **Burdyn** (`burdyn/`) — RPG crawler multijugador en Screen 4 (GAME_ID=0x03)
+6. **Parchis** (`parchis/`) — parchis online 4 jugadores en Screen 4 (GAME_ID=0x04)
+7. **Texas Hold'em** (`texas/`) — poker online hasta 6 jugadores, dealer server-side (GAME_ID=0x05)
+8. **Tetris 4P** (`tetris/`) — tetris competitivo 4 jugadores con garbage (GAME_ID=0x06)
+9. **Among MSX** (`among/`) — impostor online 4-8 jugadores (GAME_ID=0x07, en desarrollo)
+10. **Frog & Flies** (`frogflies/`) — 4 ranas cazan moscas, moscas server-side (GAME_ID=0x69)
 
-Codigo compartido en `shared/`: network.h, protocol.h, log.h
+Codigo compartido en `shared/`: network.h, protocol.h, log.h, lobby_client.h/c
 
 ---
 
@@ -39,39 +41,50 @@ MSXonLINE/                           <-- Repo GitHub (antxiko/MSXonLINE)
 |   |-- ghost-service.js             <-- Ghosts persistentes en VPS
 |   |-- game-handlers/
 |   |   |-- index.js                 <-- Registro de handlers por GAME_ID
-|   |   +-- poker-handler.js         <-- Dealer de Texas Hold'em (server-side)
+|   |   |-- poker-handler.js         <-- Dealer de Texas Hold'em (server-side)
+|   |   +-- frogflies-handler.js     <-- Moscas server-side para Frog & Flies
 |   |-- update.sh                    <-- Script de actualizacion VPS
 |   +-- msx-server.service           <-- Unidad systemd
 |
 |-- shared/                          <-- Codigo compartido entre juegos
 |   |-- network.h                    <-- Capa UNAPI TCP
 |   |-- protocol.h                   <-- Protocolo binario
-|   +-- log.h                        <-- Logging a fichero MSX-DOS 2
+|   |-- log.h                        <-- Logging a fichero MSX-DOS 2
+|   |-- lobby_client.h               <-- Lee LOBBY.DAT (lanzado desde LOBBY.COM)
+|   +-- lobby_client.c               <-- Implementacion lobby_client
+|
+|-- lobby/                           <-- LOBBY.COM standalone (Screen 0)
+|   +-- lobby_main.c                 <-- Selector de juegos + connect + salas
 |
 |-- client/                          <-- Ball Demo (GAME_ID=0x01, Screen 5)
-|   |-- msxonline.c                  <-- Fuente principal
-|   +-- build: MOL_039
+|   +-- msxonline.c                  <-- build: MOL_039
 |
 |-- damas/                           <-- Damas (GAME_ID=0x02, Screen 4)
-|   |-- damas.c                      <-- Fuente principal
-|   +-- build: DAM_022
+|   +-- damas.c                      <-- build: DAM_022
 |
 |-- burdyn/                          <-- RPG Crawler (GAME_ID=0x03, Screen 4)
-|   |-- burdyn.c                     <-- Fuente principal
-|   |-- editor.html                  <-- Editor de mapas HTML
-|   |-- assets/burdyn_map.bin        <-- Mapa 64x64
-|   +-- build: BURD_024
+|   |-- burdyn.c                     <-- build: BURD_029
+|   +-- editor.html                  <-- Editor de mapas HTML
 |
 |-- parchis/                         <-- Parchis (GAME_ID=0x04, Screen 4)
-|   |-- parchis.c                    <-- Fuente principal (NO incluido, solo en MSXgl)
-|   |-- path_editor.html             <-- Editor visual del tablero
-|   |-- tileset.png                  <-- Tileset grafico
-|   |-- screen_layout.json           <-- Layout 32x24 del tablero
-|   |-- parchis_path.json            <-- Recorrido + casas + pasillos
-|   +-- build: PAR_011
+|   |-- parchis.c                    <-- build: PAR_011 (solo en MSXgl)
+|   +-- path_editor.html             <-- Editor visual del tablero
 |
-|-- PROTOCOL.md                      <-- Especificacion del protocolo
-|-- COMMANDS.md                      <-- Referencia de comandos SSH/deploy
+|-- texas/                           <-- Texas Hold'em (GAME_ID=0x05, Screen 4)
+|   +-- texas.c                      <-- build: TEX_030
+|
+|-- tetris/                          <-- Tetris 4P (GAME_ID=0x06, Screen 4)
+|   +-- tetris.c                     <-- build: TET_024
+|
+|-- among/                           <-- Among MSX (GAME_ID=0x07, en desarrollo)
+|   +-- among.c                      <-- build: AMG_001
+|
+|-- frogflies/                       <-- Frog & Flies (GAME_ID=0x69, Screen 4)
+|   |-- frogflies.c                  <-- build: FRG_012
+|   |-- sprite_editor.html           <-- Editor sprites 16x16
+|   |-- platform_editor.html         <-- Editor posiciones nenufares
+|   +-- screen_editor.html           <-- Editor layout tiles
+|
 +-- README.md
 ```
 
@@ -271,6 +284,42 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 - Interruptores: impostor sabotea, inocentes arreglan
 - Solo ves jugadores en tu habitacion
 - GAME_ID = 0x07, modo RELAY
+
+---
+
+## LOBBY.COM (standalone)
+
+- Screen 0 (texto 40 columnas), sin tileset
+- Selector de 8 juegos con cursores + ENTER
+- Diagnostico UNAPI, connect, auth (misma logica que lobby.c)
+- Lista de salas filtrada por gameId, crear/unir/refrescar
+- Waiting room con jugadores, host pulsa S
+- Al GAME_START: escribe LOBBY.DAT (8 bytes) + _LAUNCH.BAT, sale con Bios_Exit(0)
+- AUTOEXEC.BAT en bucle: LOBBY -> _LAUNCH.BAT -> juego -> LOBBY
+- Todos los juegos soportan lobby_client.h (lee LOBBY.DAT, salta a PLAYING)
+- Backward compatible: juegos funcionan sin LOBBY.COM (lobby inline o offline)
+- LOBBY.DAT: magic(0xAA) + conn + pid + roomId + active + gameId + protoVer + reserved
+- Conexion UNAPI persiste entre programas (vive en el cartucho, no en RAM)
+- Compilar: `cd MSXgl/projects/lobby && bash build.sh`
+
+---
+
+## FROG & FLIES (FRG_012)
+
+- Screen 4 (Graphic 3, 32x24 tiles)
+- 4 ranas en nenufares, cazan moscas volantes
+- Charge-jump: 3 potencias (tap/short/long hold)
+- Salto vertical u horizontal segun direccion durante carga
+- Lengua en el aire (SPACE), colision con moscas
+- Moscas gestionadas 100% por el servidor (frogflies-handler.js)
+- Servidor spawna moscas cada 1.5s, mueve a 10Hz, envia posiciones
+- Jugador envia PKT_CATCH(flyIdx), servidor valida y broadcast PKT_SCORE
+- Win condition: primero en 20 moscas gana (servidor envia PKT_WINNER)
+- AI frogs SOLO offline (online desincronizadas entre clientes)
+- Sprites: idle R/L, jump R/L, fly1, fly2, tongue (slots 0-24)
+- Font A-Z y 0-9 inyectado en tiles 200-235 sobre tileset PNG
+- Usa lobby.h para Lobby_Poll/SendStateUpdate durante juego
+- GAME_ID = 0x69, modo RELAY + handler
 
 ---
 
