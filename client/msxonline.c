@@ -21,6 +21,7 @@
 #include "protocol.h"
 #include "network.h"
 #include "log.h"
+#include "lobby_client.h"
 
 //=============================================================================
 // CONFIGURACIÓN — EDITAR ANTES DE COMPILAR
@@ -1321,9 +1322,21 @@ void Diag_ShowNetInfo(void)
 
 void main(void)
 {
-    Diag_ShowNetInfo();
-    Game_Init();
-    g_State = STATE_CONNECTING;
+    if(LobbyClient_Load()) {
+        // From LOBBY.COM: skip diag, populate connection
+        Game_Init();
+        g_Conn = (NetConn)(int)g_LobbyData.conn;
+        g_MyPid = g_LobbyData.pid;
+        g_RoomId = g_LobbyData.roomId;
+        g_PlayerCount = 1;
+        g_Players[g_MyPid].active = TRUE;
+        Net_Init();
+        g_State = STATE_PLAYING;
+    } else {
+        Diag_ShowNetInfo();
+        Game_Init();
+        g_State = STATE_CONNECTING;
+    }
     Game_Loop();
     Game_Shutdown();
 }

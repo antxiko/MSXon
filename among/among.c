@@ -7,6 +7,7 @@
 #include "bios.h"
 #include "system.h"
 #include "dos.h"
+#include "lobby_client.h"
 
 // ── Layout ──────────────────────────────────────────────────────────
 #define MAX_PLAYERS 8

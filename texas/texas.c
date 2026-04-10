@@ -8,6 +8,7 @@
 #include "system.h"
 #include "dos.h"
 #include "lobby.h"
+#include "lobby_client.h"
 #include "tileset_data.h"
 #include "screen_data.h"
 
@@ -310,11 +311,24 @@ void main(void)
 
     *((u8*)0xF3DB) = 0;
 
-    // Lobby: diag + connect (Screen 0)
-    Lobby_Init(&g_LobbyCfg, Game_OnPacket);
-    Lobby_SetTileOffsets(T_FA, T_F0);
-    Lobby_Diag();
-    Lobby_Connect();
+    // Check if launched from LOBBY.COM
+    if(LobbyClient_Load()) {
+        // From lobby: populate lobby globals directly
+        Lobby_Init(&g_LobbyCfg, Game_OnPacket);
+        g_LobbyConn = (NetConn)(int)g_LobbyData.conn;
+        g_LobbyPid = g_LobbyData.pid;
+        g_LobbyRoomId = g_LobbyData.roomId;
+        g_LobbyActive = g_LobbyData.active;
+        g_LobbyOnline = TRUE;
+        g_LobbyState = LOBBY_ST_PLAYING;
+        Net_Init(); // re-init UNAPI (driver persists, just need our state)
+    } else {
+        // Direct launch: full lobby flow
+        Lobby_Init(&g_LobbyCfg, Game_OnPacket);
+        Lobby_SetTileOffsets(T_FA, T_F0);
+        Lobby_Diag();
+        Lobby_Connect();
+    }
 
     // Screen 4
     VDP_SetMode(VDP_MODE_SCREEN4);
@@ -327,7 +341,11 @@ void main(void)
     for(i=0;i<MAX_SEATS;i++){g_Chips[i]=0;g_LastAction[i]=255;}
     g_MyCards[0]=0;g_MyCards[1]=0;g_CommunityCount=0;g_Pot=0;
 
-    if(g_LobbyOnline) {
+    if(g_FromLobby) {
+        // Skip lobby UI, go straight to game
+        g_MySeat = g_LobbyPid - 1;
+        Board_Draw();
+    } else if(g_LobbyOnline) {
         Lobby_RequestRooms();
         g_LobbyState = LOBBY_ST_LIST_WAIT;
     } else {

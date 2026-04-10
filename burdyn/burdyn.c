@@ -14,6 +14,7 @@
 #include "protocol.h"
 #include "network.h"
 #include "log.h"
+#include "lobby_client.h"
 
 //=============================================================================
 // CONSTANTES
@@ -1517,11 +1518,17 @@ void main(void)
     u8 i;
     bool online;
 
-    // Pantalla de diagnostico (Screen 0)
-    Diag_ShowNetInfo();
-
-    // Conectar al servidor (Screen 0: auth solamente)
-    online = Net_ConnectToServer();
+    // Check if launched from LOBBY.COM
+    if(LobbyClient_Load()) {
+        g_Conn = (NetConn)(int)g_LobbyData.conn;
+        g_MyPid = g_LobbyData.pid;
+        g_RoomId = g_LobbyData.roomId;
+        online = TRUE;
+        Net_Init();
+    } else {
+        Diag_ShowNetInfo();
+        online = Net_ConnectToServer();
+    }
 
     // Screen 4 (Graphic 3)
     VDP_SetMode(VDP_MODE_SCREEN4);
@@ -1548,12 +1555,20 @@ void main(void)
     // Primera vez: forzar volcado completo
     g_FullFlush = TRUE;
 
-    // Empezar en lobby si online, o directo al juego si offline
-    if(online)
+    if(g_FromLobby)
+    {
+        // From LOBBY.COM: straight to playing
+        g_GameState = STATE_PLAYING;
+        Scroll_Update();
+        Map_DrawViewport();
+        g_HUDDirty = TRUE;
+        HUD_Draw();
+        Player_UpdateSprite();
+    }
+    else if(online)
     {
         g_GameState = STATE_LOBBY_WAIT;
         Net_RequestRoomList();
-        // Lobby se dibujara cuando llegue ROOM_LIST
     }
     else
     {

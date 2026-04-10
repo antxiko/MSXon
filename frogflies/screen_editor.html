@@ -1,0 +1,1585 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>MSX Screen 2 Editor</title>
+<style>
+* { box-sizing: border-box; }
+body { background: #1a1b2e; color: #e0e0e0; font-family: 'Segoe UI', system-ui, sans-serif; margin: 0; padding: 12px; display: flex; gap: 16px; }
+#left-panel { flex: 1; min-width: 0; }
+#right-panel { width: 340px; background: #232440; border-radius: 12px; padding: 12px; }
+.label { margin: 8px 0 4px; font-size: 13px; font-weight: 600; color: #b8b8d0; letter-spacing: 0.5px; }
+.sublabel { margin: 4px 0 2px; font-size: 11px; color: #888; }
+button { background: #2d2f50; color: #d0d0e8; border: 1px solid #444670; padding: 6px 14px; margin: 2px; cursor: pointer; font-family: inherit; font-size: 11px; border-radius: 6px; transition: all 0.15s; }
+button:hover { background: #3d3f70; border-color: #6668a0; }
+button.active { background: #4a3f80; border-color: #8878c0; color: #fff; }
+canvas { image-rendering: pixelated; border-radius: 4px; }
+#tileset-canvas { border: 1px solid #333560; cursor: pointer; }
+#screen-canvas { border: 1px solid #333560; cursor: pointer; }
+#tile-edit-canvas { border: 2px solid #8878c0; cursor: crosshair; border-radius: 8px; }
+#tile-preview { border: 1px solid #444; border-radius: 4px; }
+textarea { background: #12132a; color: #6fdf6f; border: 1px solid #333560; width: 100%; height: 120px; font-family: 'Consolas', monospace; font-size: 10px; border-radius: 8px; padding: 8px; resize: vertical; }
+.palette-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 3px; margin: 5px 0; }
+.pal-color { width: 28px; height: 28px; border: 2px solid #333; cursor: pointer; border-radius: 4px; transition: border-color 0.15s; }
+.pal-color:hover { border-color: #888; }
+.pal-color.fg-selected { border-color: #f0c040; box-shadow: 0 0 6px #f0c04080; }
+.pal-color.bg-selected { border-color: #40c0f0; box-shadow: 0 0 6px #40c0f080; }
+.color-info { font-size: 11px; margin: 3px 0; color: #999; }
+#selected-tile { border: 2px solid #f0c040; vertical-align: middle; margin: 0 8px; border-radius: 4px; }
+#info { display: inline; font-size: 12px; color: #aaa; }
+.toolbar { margin: 5px 0; display: flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+input[type=file] { display: none; }
+select { background: #2d2f50; color: #d0d0e8; border: 1px solid #444670; padding: 4px 8px; border-radius: 6px; font-family: inherit; }
+h3 { margin: 0 0 8px; color: #9090c0; font-size: 16px; }
+</style>
+</head>
+<body>
+
+<div id="left-panel">
+    <h3>MSX Screen 2 Editor</h3>
+
+    <div class="toolbar">
+        <button id="tab-tiles" class="active" onclick="switchTab('tiles')">Tiles & Map</button>
+        <button id="tab-sprites" onclick="switchTab('sprites')">Sprites</button>
+    </div>
+
+    <div id="tiles-tab">
+    <div class="label">Tileset (click to select, double-click to edit):</div>
+    <canvas id="tileset-canvas"></canvas>
+
+    <div class="toolbar">
+        Selected: <canvas id="selected-tile" width="32" height="32"></canvas>
+        <span id="info">Tile #0</span>
+        <button onclick="fillAll()">Fill All</button>
+        <button onclick="clearAll()">Clear</button>
+        <button onclick="exportMap()">Export Map (.json)</button>
+        <button onclick="importMap()">Import Map (.json)</button>
+        <button onclick="exportCArray()">Export C Array</button>
+        <button onclick="exportBin()">Export .bin</button>
+        <button onclick="loadTileset()">Load PNG</button>
+        <button id="btnSaveTileset" onclick="saveTileset()">Save Tileset PNG</button>
+        <button onclick="importImage()" style="background:#264;color:#fff;">Import Image</button>
+        <button onclick="exportRegion()">Export Region</button>
+        <button onclick="optimizeTiles()" style="background:#642;color:#fff;">Optimize Tiles</button>
+    </div>
+
+    <div class="label">Screen (32x24 = 256x192):</div>
+    <canvas id="screen-canvas"></canvas>
+
+    <div class="label">Output:</div>
+    <textarea id="output"></textarea>
+    </div><!-- end tiles-tab -->
+
+    <div id="sprites-tab" style="display:none">
+        <div class="label">Sprites (32 x 8x8 or 8 x 16x16)</div>
+        <div class="toolbar">
+            Set: <select id="spr-set-select" onchange="sprChangeSet(this.value)"></select>
+            <button onclick="sprAddSet()">+ New Set</button>
+            <button onclick="sprRenameSet()">Rename</button>
+            <button onclick="sprDeleteSet()">Delete Set</button>
+        </div>
+        <div class="toolbar">
+            <button id="spr-mode-8" class="active" onclick="setSprMode(8)">8x8 Mode</button>
+            <button id="spr-mode-16" onclick="setSprMode(16)">16x16 Mode</button>
+            <span style="margin-left:10px">Sprite: <span id="spr-current-num">0</span></span>
+        </div>
+
+        <div style="display:flex;gap:15px;">
+            <div style="flex:1">
+                <div class="sublabel">Sprite Editor:</div>
+                <canvas id="spr-edit-canvas" width="384" height="384"></canvas>
+
+                <div style="display:flex;gap:10px;align-items:flex-start;margin:5px 0">
+                    <div>
+                        <div class="sublabel">Preview:</div>
+                        <canvas id="spr-preview" width="64" height="64"></canvas>
+                    </div>
+                    <div>
+                        <div class="sublabel">Color (click to set):</div>
+                        <div class="palette-grid" id="spr-palette"></div>
+                        <div class="color-info">Color: <span id="spr-color-info">15 White</span></div>
+                    </div>
+                </div>
+
+                <div class="toolbar">
+                    <button onclick="sprFlipH()">Flip H</button>
+                    <button onclick="sprFlipV()">Flip V</button>
+                    <button onclick="sprRotate()">Rotate</button>
+                    <button onclick="sprClear()">Clear</button>
+                    <button onclick="sprInvert()">Invert</button>
+                </div>
+                <div class="toolbar">
+                    <button onclick="sprPrev()">Prev</button>
+                    <button onclick="sprNext()">Next</button>
+                    <button onclick="sprExportJSON()">Export (.json)</button>
+                    <button onclick="sprImportJSON()">Import (.json)</button>
+                    <button onclick="sprExportC()">Export C</button>
+                    <button onclick="sprExportBin()">Export .bin</button>
+                </div>
+
+                <div class="label">Output:</div>
+                <textarea id="spr-output"></textarea>
+            </div>
+
+            <div style="width:460px">
+                <div class="sublabel">All 32 Sprites (click to select):</div>
+                <canvas id="spr-grid-canvas" width="448" height="224"></canvas>
+            </div>
+        </div>
+    </div><!-- end sprites-tab -->
+</div>
+
+<div id="right-panel">
+    <div class="label">Tile Editor - Tile #<span id="edit-tile-num">0</span></div>
+    <canvas id="tile-edit-canvas" width="256" height="256"></canvas>
+
+    <div class="sublabel">Preview:</div>
+    <canvas id="tile-preview" width="64" height="64"></canvas>
+
+    <div class="sublabel">MSX1 Palette (left=FG, right=BG):</div>
+    <div class="palette-grid" id="palette"></div>
+    <div class="color-info">
+        FG: <span id="fg-info">15 White</span> |
+        BG: <span id="bg-info">1 Black</span>
+    </div>
+    <div class="sublabel">Row colors (per 8px row, 2 colors max):</div>
+    <div id="row-colors"></div>
+
+    <div class="toolbar">
+        <button onclick="tileFlipH()">Flip H</button>
+        <button onclick="tileFlipV()">Flip V</button>
+        <button onclick="tileRotate()">Rotate</button>
+        <button onclick="tileClear()">Clear Tile</button>
+        <button onclick="tileInvert()">Invert</button>
+        <button onclick="tileCopy()">Copy (C)</button>
+        <button onclick="tilePaste()">Paste (V)</button>
+        <button onclick="applyTileEdit()">Apply to Tileset</button>
+    </div>
+</div>
+
+<input type="file" id="file-input" accept=".png">
+
+<script>
+// MSX1 Palette
+const MSX_PALETTE = [
+    [0,0,0,'Transparent'],[0,0,0,'Black'],[36,219,70,'Med Green'],[109,235,143,'Lt Green'],
+    [77,80,230,'Dk Blue'],[118,114,255,'Lt Blue'],[200,71,72,'Dk Red'],[84,243,242,'Cyan'],
+    [232,91,87,'Med Red'],[255,130,128,'Lt Red'],[217,200,82,'Dk Yellow'],[234,212,136,'Lt Yellow'],
+    [32,170,60,'Dk Green'],[195,91,183,'Magenta'],[203,203,203,'Gray'],[255,255,255,'White']
+];
+
+const COLS = 32, ROWS = 24, TILE_W = 8, TILE_H = 8, SCALE = 3;
+const TSET_COLS = 32; let TSET_ROWS = 8;
+const EDIT_SCALE = 32; // pixel size in tile editor
+
+let tilesetImg = null;
+let tilesetCanvas2D = null; // offscreen canvas for pixel manipulation
+let selectedTile = 0;
+let screenMap = new Uint8Array(COLS * ROWS);
+let tilesetDirty = false;
+
+function markTilesetDirty() {
+    if (!tilesetDirty) {
+        tilesetDirty = true;
+        const btn = document.getElementById('btnSaveTileset');
+        btn.style.backgroundColor = '#8B0000';
+        btn.style.color = '#FFF';
+    }
+}
+
+function clearTilesetDirty() {
+    tilesetDirty = false;
+    const btn = document.getElementById('btnSaveTileset');
+    btn.style.backgroundColor = '';
+    btn.style.color = '';
+}
+let isDrawing = false, rightClick = false;
+
+// Tile editor state
+let editTile = 0;
+let editPixels = new Uint8Array(64); // 8x8 MSX color indices
+let editFG = 15; // white
+let editBG = 1;  // black
+let isEditDrawing = false, editRightBtn = false;
+
+screenMap.fill(0);
+
+// Canvas refs
+const tsetCanvas = document.getElementById('tileset-canvas');
+const tsetCtx = tsetCanvas.getContext('2d');
+const scrCanvas = document.getElementById('screen-canvas');
+const scrCtx = scrCanvas.getContext('2d');
+const selCanvas = document.getElementById('selected-tile');
+const selCtx = selCanvas.getContext('2d');
+const editCanvas = document.getElementById('tile-edit-canvas');
+const editCtx = editCanvas.getContext('2d');
+const prevCanvas = document.getElementById('tile-preview');
+const prevCtx = prevCanvas.getContext('2d');
+
+tsetCanvas.width = TSET_COLS * TILE_W * SCALE;
+tsetCanvas.height = TSET_ROWS * TILE_H * SCALE;
+scrCanvas.width = COLS * TILE_W * SCALE;
+scrCanvas.height = ROWS * TILE_H * SCALE;
+
+[tsetCtx, scrCtx, selCtx, editCtx, prevCtx].forEach(c => c.imageSmoothingEnabled = false);
+
+// Build palette UI
+const palDiv = document.getElementById('palette');
+for (let i = 0; i < 16; i++) {
+    const d = document.createElement('div');
+    d.className = 'pal-color';
+    d.style.background = `rgb(${MSX_PALETTE[i][0]},${MSX_PALETTE[i][1]},${MSX_PALETTE[i][2]})`;
+    if (i === 0) d.style.background = 'repeating-conic-gradient(#808080 0% 25%, #404040 0% 50%) 50%/8px 8px';
+    d.title = `${i}: ${MSX_PALETTE[i][3]}`;
+    d.addEventListener('mousedown', function(e) {
+        e.preventDefault();
+        if (e.button === 2) { editBG = i; } else { editFG = i; }
+        updatePaletteUI();
+    });
+    d.addEventListener('contextmenu', e => e.preventDefault());
+    palDiv.appendChild(d);
+}
+
+function updatePaletteUI() {
+    document.querySelectorAll('.pal-color').forEach((d, i) => {
+        d.classList.toggle('fg-selected', i === editFG);
+        d.classList.toggle('bg-selected', i === editBG);
+    });
+    document.getElementById('fg-info').textContent = editFG + ' ' + MSX_PALETTE[editFG][3];
+    document.getElementById('bg-info').textContent = editBG + ' ' + MSX_PALETTE[editBG][3];
+}
+updatePaletteUI();
+
+// Tileset loading
+function loadTileset() { document.getElementById('file-input').click(); }
+
+document.getElementById('file-input').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(ev) {
+        const img = new Image();
+        img.onload = function() {
+            tilesetImg = img;
+            TSET_ROWS = Math.ceil(img.height / TILE_H);
+            document.getElementById('tileset-canvas').height = TSET_ROWS * TILE_H * SCALE;
+            createTilesetCanvas();
+            drawTileset(); drawScreen(); updateSelected();
+            loadTileToEditor(selectedTile);
+        };
+        img.src = ev.target.result;
+    };
+    reader.readAsDataURL(file);
+});
+
+// No tileset loaded by default - use Load PNG button
+
+function createTilesetCanvas() {
+    tilesetCanvas2D = document.createElement('canvas');
+    tilesetCanvas2D.width = tilesetImg.width;
+    tilesetCanvas2D.height = tilesetImg.height;
+    const ctx = tilesetCanvas2D.getContext('2d');
+    ctx.drawImage(tilesetImg, 0, 0);
+}
+
+function closestMSXColor(r, g, b) {
+    let best = 1, bestD = Infinity;
+    for (let i = 1; i < 16; i++) {
+        const dr = r - MSX_PALETTE[i][0], dg = g - MSX_PALETTE[i][1], db = b - MSX_PALETTE[i][2];
+        const d = dr*dr + dg*dg + db*db;
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    return best;
+}
+
+// Load tile pixels into editor
+function loadTileToEditor(tileIdx) {
+    editTile = tileIdx;
+    document.getElementById('edit-tile-num').textContent = tileIdx;
+    if (!tilesetImg) return;
+    // Use a temp canvas to read pixels (avoids CORS issues with tilesetCanvas2D)
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = 8; tmpCanvas.height = 8;
+    const tmpCtx = tmpCanvas.getContext('2d');
+    const srcX = (tileIdx % TSET_COLS) * TILE_W;
+    const srcY = Math.floor(tileIdx / TSET_COLS) * TILE_H;
+    tmpCtx.drawImage(tilesetImg, srcX, srcY, 8, 8, 0, 0, 8, 8);
+    try {
+        const imgData = tmpCtx.getImageData(0, 0, 8, 8);
+        for (let y = 0; y < 8; y++)
+            for (let x = 0; x < 8; x++) {
+                const i = (y * 8 + x) * 4;
+                editPixels[y * 8 + x] = closestMSXColor(imgData.data[i], imgData.data[i+1], imgData.data[i+2]);
+            }
+    } catch(e) {
+        // CORS: fill with BG color
+        editPixels.fill(editBG);
+    }
+    drawTileEditor();
+}
+
+// Draw tile editor (big grid)
+function drawTileEditor() {
+    editCtx.clearRect(0, 0, 256, 256);
+    for (let y = 0; y < 8; y++) {
+        for (let x = 0; x < 8; x++) {
+            const c = editPixels[y * 8 + x];
+            const rgb = MSX_PALETTE[c];
+            editCtx.fillStyle = c === 0 ? '#808080' : `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+            editCtx.fillRect(x * EDIT_SCALE, y * EDIT_SCALE, EDIT_SCALE, EDIT_SCALE);
+        }
+    }
+    // Grid
+    editCtx.strokeStyle = 'rgba(255,255,255,0.2)';
+    for (let i = 0; i <= 8; i++) {
+        editCtx.beginPath(); editCtx.moveTo(i*EDIT_SCALE, 0); editCtx.lineTo(i*EDIT_SCALE, 256); editCtx.stroke();
+        editCtx.beginPath(); editCtx.moveTo(0, i*EDIT_SCALE); editCtx.lineTo(256, i*EDIT_SCALE); editCtx.stroke();
+    }
+    // Preview
+    prevCtx.clearRect(0, 0, 64, 64);
+    for (let y = 0; y < 8; y++)
+        for (let x = 0; x < 8; x++) {
+            const c = editPixels[y * 8 + x];
+            const rgb = MSX_PALETTE[c];
+            prevCtx.fillStyle = c === 0 ? '#000' : `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+            prevCtx.fillRect(x * 8, y * 8, 8, 8);
+        }
+    // Row colors info
+    let rowHtml = '';
+    for (let y = 0; y < 8; y++) {
+        const colors = new Set();
+        for (let x = 0; x < 8; x++) colors.add(editPixels[y * 8 + x]);
+        const warn = colors.size > 2 ? ' style="color:red"' : '';
+        rowHtml += `<div${warn}>Row ${y}: ${[...colors].map(c=>c+' '+MSX_PALETTE[c][3]).join(', ')} (${colors.size} colors${colors.size>2?' WARNING!':''})</div>`;
+    }
+    document.getElementById('row-colors').innerHTML = rowHtml;
+}
+
+// Tile editor mouse
+function editPlace(e) {
+    const rect = editCanvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / EDIT_SCALE);
+    const y = Math.floor((e.clientY - rect.top) / EDIT_SCALE);
+    if (x < 0 || x >= 8 || y < 0 || y >= 8) return;
+    editPixels[y * 8 + x] = editRightBtn ? editBG : editFG;
+    drawTileEditor();
+}
+editCanvas.addEventListener('mousedown', function(e) { e.preventDefault(); isEditDrawing = true; editRightBtn = (e.button === 2); editPlace(e); });
+editCanvas.addEventListener('mousemove', function(e) { if (isEditDrawing) editPlace(e); });
+editCanvas.addEventListener('mouseup', function() { isEditDrawing = false; });
+editCanvas.addEventListener('mouseleave', function() { isEditDrawing = false; });
+editCanvas.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+    let menu = document.getElementById('tile-ctx-menu');
+    if (!menu) {
+        menu = document.createElement('div');
+        menu.id = 'tile-ctx-menu';
+        menu.style.cssText = 'position:fixed;background:#222;border:1px solid #0f0;padding:4px 0;z-index:9999;min-width:100px;';
+        menu.innerHTML = '<div class="ctx-item" style="padding:4px 16px;cursor:pointer;color:#0f0;" onmousedown="tileCopy();hideCtxMenu()">Copy (C)</div>'
+                       + '<div class="ctx-item" style="padding:4px 16px;cursor:pointer;color:#0f0;" onmousedown="tilePaste();hideCtxMenu()">Paste (V)</div>';
+        document.body.appendChild(menu);
+        menu.querySelectorAll('.ctx-item').forEach(el => {
+            el.addEventListener('mouseenter', function() { this.style.backgroundColor = '#0f0'; this.style.color = '#000'; });
+            el.addEventListener('mouseleave', function() { this.style.backgroundColor = ''; this.style.color = '#0f0'; });
+        });
+    }
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    menu.style.display = 'block';
+});
+
+// Tile operations
+function tileFlipH() {
+    for (let y = 0; y < 8; y++)
+        for (let x = 0; x < 4; x++) {
+            const a = y*8+x, b = y*8+(7-x);
+            [editPixels[a], editPixels[b]] = [editPixels[b], editPixels[a]];
+        }
+    drawTileEditor();
+}
+function tileFlipV() {
+    for (let y = 0; y < 4; y++)
+        for (let x = 0; x < 8; x++) {
+            const a = y*8+x, b = (7-y)*8+x;
+            [editPixels[a], editPixels[b]] = [editPixels[b], editPixels[a]];
+        }
+    drawTileEditor();
+}
+function tileRotate() {
+    const tmp = new Uint8Array(64);
+    for (let y = 0; y < 8; y++)
+        for (let x = 0; x < 8; x++)
+            tmp[x*8+(7-y)] = editPixels[y*8+x];
+    editPixels.set(tmp);
+    drawTileEditor();
+}
+function tileClear() { editPixels.fill(editBG); drawTileEditor(); }
+let tileClipboard = null;
+function tileCopy() { tileClipboard = new Uint8Array(editPixels); }
+function tilePaste() { if (tileClipboard) { editPixels.set(tileClipboard); drawTileEditor(); } }
+
+// --- Undo system ---
+const UNDO_MAX = 20;
+let undoStack = [];
+function undoPush() {
+    undoStack.push(new Uint8Array(screenMap));
+    if (undoStack.length > UNDO_MAX) undoStack.shift();
+}
+function undoPop() {
+    if (undoStack.length === 0) return;
+    const prev = undoStack.pop();
+    screenMap.set(prev);
+    markTilesetDirty();
+    drawScreen();
+}
+
+// --- Group tile selection & copy/paste ---
+let tileSelStart = -1, tileSelEnd = -1; // tile indices for rectangular selection
+let tileGroupClipboard = null; // {w, h, tiles: [{pixels: Uint8Array}...]}
+
+// Map group selection & copy/paste
+let mapSelecting = false, mapSelX1 = -1, mapSelY1 = -1, mapSelX2 = -1, mapSelY2 = -1;
+let mapGroupClipboard = null; // {w, h, data: [tile indices]}
+
+function getTilePixels(tileIdx) {
+    if (!tilesetCanvas2D) return null;
+    const ctx = tilesetCanvas2D.getContext('2d');
+    const tx = (tileIdx % TSET_COLS) * TILE_W;
+    const ty = Math.floor(tileIdx / TSET_COLS) * TILE_H;
+    const imgData = ctx.getImageData(tx, ty, 8, 8);
+    const pixels = new Uint8Array(64);
+    for (let i = 0; i < 64; i++) {
+        const r = imgData.data[i*4], g = imgData.data[i*4+1], b = imgData.data[i*4+2];
+        let best = 0, bestDist = Infinity;
+        for (let c = 0; c < 16; c++) {
+            const dr = r-MSX_PALETTE[c][0], dg = g-MSX_PALETTE[c][1], db = b-MSX_PALETTE[c][2];
+            const d = dr*dr+dg*dg+db*db;
+            if (d < bestDist) { bestDist = d; best = c; }
+        }
+        pixels[i] = best;
+    }
+    return pixels;
+}
+
+function setTilePixels(tileIdx, pixels) {
+    if (!tilesetCanvas2D) return;
+    const ctx = tilesetCanvas2D.getContext('2d');
+    const tx = (tileIdx % TSET_COLS) * TILE_W;
+    const ty = Math.floor(tileIdx / TSET_COLS) * TILE_H;
+    const imgData = ctx.createImageData(8, 8);
+    for (let i = 0; i < 64; i++) {
+        const rgb = MSX_PALETTE[pixels[i]];
+        imgData.data[i*4] = rgb[0]; imgData.data[i*4+1] = rgb[1]; imgData.data[i*4+2] = rgb[2]; imgData.data[i*4+3] = 255;
+    }
+    ctx.putImageData(imgData, tx, ty);
+}
+
+function tileSelRect() {
+    if (tileSelStart < 0 || tileSelEnd < 0) return null;
+    const x1 = Math.min(tileSelStart % TSET_COLS, tileSelEnd % TSET_COLS);
+    const y1 = Math.min(Math.floor(tileSelStart / TSET_COLS), Math.floor(tileSelEnd / TSET_COLS));
+    const x2 = Math.max(tileSelStart % TSET_COLS, tileSelEnd % TSET_COLS);
+    const y2 = Math.max(Math.floor(tileSelStart / TSET_COLS), Math.floor(tileSelEnd / TSET_COLS));
+    return {x1, y1, x2, y2, w: x2-x1+1, h: y2-y1+1};
+}
+
+function groupTileCopy() {
+    const r = tileSelRect();
+    if (!r) return;
+    tileGroupClipboard = {w: r.w, h: r.h, tiles: []};
+    for (let y = r.y1; y <= r.y2; y++)
+        for (let x = r.x1; x <= r.x2; x++)
+            tileGroupClipboard.tiles.push(getTilePixels(y * TSET_COLS + x));
+}
+
+function groupTilePaste() {
+    if (!tileGroupClipboard) return;
+    const startX = selectedTile % TSET_COLS;
+    const startY = Math.floor(selectedTile / TSET_COLS);
+    let i = 0;
+    for (let y = 0; y < tileGroupClipboard.h; y++) {
+        for (let x = 0; x < tileGroupClipboard.w; x++) {
+            const dx = startX + x, dy = startY + y;
+            if (dx < TSET_COLS && dy < TSET_ROWS) {
+                setTilePixels(dy * TSET_COLS + dx, tileGroupClipboard.tiles[i]);
+            }
+            i++;
+        }
+    }
+    tilesetImg = tilesetCanvas2D;
+    markTilesetDirty();
+    drawTileset(); drawScreen(); updateSelected();
+    loadTileToEditor(selectedTile);
+}
+
+function mapSelRect() {
+    if (mapSelX1 < 0) return null;
+    const x1 = Math.min(mapSelX1, mapSelX2), y1 = Math.min(mapSelY1, mapSelY2);
+    const x2 = Math.max(mapSelX1, mapSelX2), y2 = Math.max(mapSelY1, mapSelY2);
+    return {x1, y1, x2, y2, w: x2-x1+1, h: y2-y1+1};
+}
+
+function groupMapCopy() {
+    const r = mapSelRect();
+    if (!r) return;
+    mapGroupClipboard = {w: r.w, h: r.h, data: []};
+    for (let y = r.y1; y <= r.y2; y++)
+        for (let x = r.x1; x <= r.x2; x++)
+            mapGroupClipboard.data.push(screenMap[y * COLS + x]);
+}
+
+function groupMapPaste(px, py) {
+    if (!mapGroupClipboard) return;
+    undoPush();
+    let i = 0;
+    for (let y = 0; y < mapGroupClipboard.h; y++) {
+        for (let x = 0; x < mapGroupClipboard.w; x++) {
+            const dx = px + x, dy = py + y;
+            if (dx < COLS && dy < ROWS)
+                screenMap[dy * COLS + dx] = mapGroupClipboard.data[i];
+            i++;
+        }
+    }
+    markTilesetDirty();
+    drawScreen();
+}
+function tileInvert() {
+    for (let i = 0; i < 64; i++)
+        editPixels[i] = editPixels[i] === editFG ? editBG : editFG;
+    drawTileEditor();
+}
+
+// Apply edited tile back to tileset
+function applyTileEdit() {
+    if (!tilesetCanvas2D) return;
+    const ctx = tilesetCanvas2D.getContext('2d');
+    const tx = (editTile % TSET_COLS) * TILE_W;
+    const ty = Math.floor(editTile / TSET_COLS) * TILE_H;
+    const imgData = ctx.createImageData(8, 8);
+    for (let y = 0; y < 8; y++)
+        for (let x = 0; x < 8; x++) {
+            const c = editPixels[y*8+x];
+            const rgb = MSX_PALETTE[c];
+            const i = (y*8+x)*4;
+            imgData.data[i] = rgb[0]; imgData.data[i+1] = rgb[1]; imgData.data[i+2] = rgb[2]; imgData.data[i+3] = 255;
+        }
+    ctx.putImageData(imgData, tx, ty);
+    // Use the offscreen canvas directly as the tileset image source
+    tilesetImg = tilesetCanvas2D;
+    markTilesetDirty();
+    drawTileset(); drawScreen(); updateSelected();
+}
+
+// Save tileset as PNG
+function saveTileset() {
+    if (!tilesetCanvas2D) return;
+    const a = document.createElement('a');
+    a.href = tilesetCanvas2D.toDataURL('image/png');
+    a.download = 'tileset.png';
+    a.click();
+    clearTilesetDirty();
+}
+
+// --- Screen editor (same as before) ---
+function drawTileset() {
+    if (!tilesetImg) return;
+    tsetCtx.clearRect(0, 0, tsetCanvas.width, tsetCanvas.height);
+    tsetCtx.drawImage(tilesetImg, 0, 0, TSET_COLS * TILE_W, TSET_ROWS * TILE_H, 0, 0, TSET_COLS * TILE_W * SCALE, TSET_ROWS * TILE_H * SCALE);
+    tsetCtx.strokeStyle = 'rgba(255,255,255,0.15)';
+    for (let x = 0; x <= TSET_COLS; x++) { tsetCtx.beginPath(); tsetCtx.moveTo(x*TILE_W*SCALE,0); tsetCtx.lineTo(x*TILE_W*SCALE,tsetCanvas.height); tsetCtx.stroke(); }
+    for (let y = 0; y <= TSET_ROWS; y++) { tsetCtx.beginPath(); tsetCtx.moveTo(0,y*TILE_H*SCALE); tsetCtx.lineTo(tsetCanvas.width,y*TILE_H*SCALE); tsetCtx.stroke(); }
+    const sx = (selectedTile%TSET_COLS)*TILE_W*SCALE, sy = Math.floor(selectedTile/TSET_COLS)*TILE_H*SCALE;
+    tsetCtx.strokeStyle = 'yellow'; tsetCtx.lineWidth = 2;
+    tsetCtx.strokeRect(sx, sy, TILE_W*SCALE, TILE_H*SCALE); tsetCtx.lineWidth = 1;
+    // Draw group selection rectangle
+    const sr = tileSelRect();
+    if (sr) {
+        tsetCtx.strokeStyle = '#0ff'; tsetCtx.lineWidth = 2;
+        tsetCtx.setLineDash([4, 4]);
+        tsetCtx.strokeRect(sr.x1*TILE_W*SCALE, sr.y1*TILE_H*SCALE, sr.w*TILE_W*SCALE, sr.h*TILE_H*SCALE);
+        tsetCtx.setLineDash([]); tsetCtx.lineWidth = 1;
+    }
+}
+
+function drawTileAt(tx, ty) {
+    if (!tilesetImg) return;
+    const idx = screenMap[ty*COLS+tx];
+    const srcX = (idx%TSET_COLS)*TILE_W, srcY = Math.floor(idx/TSET_COLS)*TILE_H;
+    scrCtx.drawImage(tilesetImg, srcX, srcY, TILE_W, TILE_H, tx*TILE_W*SCALE, ty*TILE_H*SCALE, TILE_W*SCALE, TILE_H*SCALE);
+}
+
+function drawScreen() {
+    for (let y = 0; y < ROWS; y++) for (let x = 0; x < COLS; x++) drawTileAt(x, y);
+    // Draw map group selection rectangle
+    const mr = mapSelRect();
+    if (mr) {
+        scrCtx.strokeStyle = '#0ff'; scrCtx.lineWidth = 2;
+        scrCtx.setLineDash([4, 4]);
+        scrCtx.strokeRect(mr.x1*TILE_W*SCALE, mr.y1*TILE_H*SCALE, mr.w*TILE_W*SCALE, mr.h*TILE_H*SCALE);
+        scrCtx.setLineDash([]); scrCtx.lineWidth = 1;
+    }
+}
+
+function updateSelected() {
+    if (!tilesetImg) return;
+    const srcX = (selectedTile%TSET_COLS)*TILE_W, srcY = Math.floor(selectedTile/TSET_COLS)*TILE_H;
+    selCtx.clearRect(0,0,32,32);
+    selCtx.drawImage(tilesetImg, srcX, srcY, TILE_W, TILE_H, 0, 0, 32, 32);
+    document.getElementById('info').textContent = 'Tile #' + selectedTile;
+}
+
+// Tileset: tooltip + click=select+edit
+tsetCanvas.addEventListener('mousemove', function(e) {
+    const rect = tsetCanvas.getBoundingClientRect();
+    const tx = Math.floor((e.clientX-rect.left)/(TILE_W*SCALE));
+    const ty = Math.floor((e.clientY-rect.top)/(TILE_H*SCALE));
+    let tip = document.getElementById('tooltip');
+    if (!tip) { tip = document.createElement('div'); tip.id='tooltip'; tip.style.cssText='position:fixed;background:#000;color:#0f0;border:1px solid #0f0;padding:2px 6px;font-size:11px;pointer-events:none;z-index:999;'; document.body.appendChild(tip); }
+    const idx = Math.min(ty*TSET_COLS+tx, 255);
+    tip.textContent = 'Tile #'+idx;
+    tip.style.left = (e.clientX+12)+'px'; tip.style.top = (e.clientY+12)+'px';
+    tip.style.display = 'block';
+});
+tsetCanvas.addEventListener('mouseleave', function() { const t=document.getElementById('tooltip'); if(t) t.style.display='none'; });
+tsetCanvas.addEventListener('mousedown', function(e) {
+    const rect = tsetCanvas.getBoundingClientRect();
+    const tx = Math.floor((e.clientX-rect.left)/(TILE_W*SCALE));
+    const ty = Math.floor((e.clientY-rect.top)/(TILE_H*SCALE));
+    const idx = Math.min(ty*TSET_COLS+tx, 255);
+    if (e.shiftKey) {
+        // Shift+click: start or complete range selection
+        if (tileSelStart < 0) {
+            tileSelStart = idx; tileSelEnd = idx;
+        } else {
+            tileSelEnd = idx;
+        }
+    } else {
+        tileSelStart = -1; tileSelEnd = -1; // clear selection
+        selectedTile = idx;
+        loadTileToEditor(selectedTile);
+    }
+    drawTileset(); updateSelected();
+});
+
+// Screen drawing
+function screenPlace(e) {
+    const rect = scrCanvas.getBoundingClientRect();
+    const tx = Math.floor((e.clientX-rect.left)/(TILE_W*SCALE));
+    const ty = Math.floor((e.clientY-rect.top)/(TILE_H*SCALE));
+    if (tx<0||tx>=COLS||ty<0||ty>=ROWS) return;
+    screenMap[ty*COLS+tx] = rightClick ? 0 : selectedTile;
+    markTilesetDirty();
+    drawTileAt(tx, ty);
+}
+let mapDragSelecting = false;
+scrCanvas.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    if (e.shiftKey) {
+        // Shift+drag: start map range selection
+        const rect = scrCanvas.getBoundingClientRect();
+        const tx = Math.floor((e.clientX-rect.left)/(TILE_W*SCALE));
+        const ty = Math.floor((e.clientY-rect.top)/(TILE_H*SCALE));
+        if (tx<0||tx>=COLS||ty<0||ty>=ROWS) return;
+        mapSelX1 = tx; mapSelY1 = ty; mapSelX2 = tx; mapSelY2 = ty;
+        mapDragSelecting = true;
+        drawScreen();
+        return;
+    }
+    mapSelX1 = -1; mapSelY1 = -1; // clear map selection on normal click
+    undoPush(); // save state before drawing
+    isDrawing=true; rightClick=(e.button===2); screenPlace(e);
+});
+scrCanvas.addEventListener('mousemove', function(e) {
+    if (mapDragSelecting) {
+        const rect = scrCanvas.getBoundingClientRect();
+        const tx = Math.max(0, Math.min(COLS-1, Math.floor((e.clientX-rect.left)/(TILE_W*SCALE))));
+        const ty = Math.max(0, Math.min(ROWS-1, Math.floor((e.clientY-rect.top)/(TILE_H*SCALE))));
+        mapSelX2 = tx; mapSelY2 = ty;
+        drawScreen();
+        return;
+    }
+    if(isDrawing) screenPlace(e);
+});
+scrCanvas.addEventListener('mouseup', function() { isDrawing=false; mapDragSelecting=false; });
+scrCanvas.addEventListener('mouseleave', function() { isDrawing=false; });
+scrCanvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+scrCanvas.addEventListener('mousemove', function(e) {
+    if (isDrawing) { screenPlace(e); return; }
+    const rect = scrCanvas.getBoundingClientRect();
+    const tx = Math.floor((e.clientX-rect.left)/(TILE_W*SCALE));
+    const ty = Math.floor((e.clientY-rect.top)/(TILE_H*SCALE));
+    let tip = document.getElementById('tooltip');
+    if (!tip) { tip = document.createElement('div'); tip.id='tooltip'; tip.style.cssText='position:fixed;background:#000;color:#0f0;border:1px solid #0f0;padding:2px 6px;font-size:11px;pointer-events:none;z-index:999;'; document.body.appendChild(tip); }
+    if (tx>=0&&tx<COLS&&ty>=0&&ty<ROWS) {
+        tip.textContent = 'Tile #'+screenMap[ty*COLS+tx]+' ('+tx+','+ty+')';
+        tip.style.left = (e.clientX+12)+'px'; tip.style.top = (e.clientY+12)+'px';
+        tip.style.display = 'block';
+    } else { tip.style.display='none'; }
+});
+scrCanvas.addEventListener('mouseleave', function() { isDrawing=false; const t=document.getElementById('tooltip'); if(t) t.style.display='none'; });
+
+function fillAll() { undoPush(); screenMap.fill(selectedTile); drawScreen(); }
+function clearAll() { undoPush(); screenMap.fill(0); drawScreen(); }
+
+function exportMap() {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({
+        width: COLS, height: ROWS,
+        tiles: Array.from(screenMap)
+    })], {type: 'application/json'}));
+    a.download = 'screen_layout.json';
+    a.click();
+}
+
+function exportCArray() {
+    let out = 'static const u8 g_ScreenLayout['+COLS*ROWS+'] = {\n';
+    for (let y = 0; y < ROWS; y++) {
+        out += '    ';
+        for (let x = 0; x < COLS; x++) { out += screenMap[y*COLS+x]; if(y<ROWS-1||x<COLS-1) out+=','; }
+        out += ' // row '+y+'\n';
+    }
+    out += '};\n';
+    const ta = document.getElementById('output');
+    ta.value = out;
+    ta.scrollIntoView();
+    ta.select();
+}
+
+function exportBin() {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([screenMap]));
+    a.download = 'screen_layout.bin'; a.click();
+}
+
+function importMap() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(ev) {
+            try {
+                const data = JSON.parse(ev.target.result);
+                if (data.tiles && data.tiles.length) {
+                    for (let i = 0; i < Math.min(data.tiles.length, COLS*ROWS); i++)
+                        screenMap[i] = data.tiles[i];
+                    drawScreen();
+                }
+            } catch(err) { alert('Error reading file: ' + err.message); }
+        };
+        reader.readAsText(file);
+    };
+    input.click();
+}
+
+// =============================================================================
+// SPRITE EDITOR
+// =============================================================================
+
+// Sprite data: multiple sets, each set = 32 sprites of 8x8, 1 color each
+let sprSets = [{ name: 'Set 0', sprites: [], colors: [] }];
+let sprCurrentSet = 0;
+let sprCurrentIdx = 0;
+let sprMode = 8; // 8 or 16
+let sprColor = 15; // current sprite color
+let sprIsDrawing = false;
+let sprRightBtn = false;
+
+// Init first set
+function initSprSet(set) {
+    set.sprites = [];
+    set.colors = [];
+    for (let i = 0; i < 32; i++) {
+        set.sprites.push(new Uint8Array(8)); // 8 bytes per 8x8 sprite
+        set.colors.push(15); // default white
+    }
+}
+initSprSet(sprSets[0]);
+
+const sprGridCanvas = document.getElementById('spr-grid-canvas');
+const sprGridCtx = sprGridCanvas.getContext('2d');
+const sprEditCanvas = document.getElementById('spr-edit-canvas');
+const sprEditCtx = sprEditCanvas.getContext('2d');
+const sprPrevCanvas = document.getElementById('spr-preview');
+const sprPrevCtx = sprPrevCanvas.getContext('2d');
+[sprGridCtx, sprEditCtx, sprPrevCtx].forEach(c => c.imageSmoothingEnabled = false);
+
+// Build sprite palette
+const sprPalDiv = document.getElementById('spr-palette');
+for (let i = 0; i < 16; i++) {
+    const d = document.createElement('div');
+    d.className = 'pal-color';
+    d.style.background = i === 0 ? 'repeating-conic-gradient(#808080 0% 25%, #404040 0% 50%) 50%/8px 8px'
+        : `rgb(${MSX_PALETTE[i][0]},${MSX_PALETTE[i][1]},${MSX_PALETTE[i][2]})`;
+    d.title = `${i}: ${MSX_PALETTE[i][3]}`;
+    d.addEventListener('click', function() {
+        sprColor = i;
+        // Color 0 = eraser tool, don't change the sprite's actual color
+        if (i > 0) {
+            sprSets[sprCurrentSet].colors[sprCurrentIdx] = i;
+            if (sprMode === 16) {
+                const base = sprCurrentIdx & ~3;
+                for (let j = 0; j < 4; j++) sprSets[sprCurrentSet].colors[base + j] = i;
+            }
+        }
+        updateSprPalette();
+        drawSprGrid();
+        drawSprPreview();
+    });
+    sprPalDiv.appendChild(d);
+}
+
+function updateSprPalette() {
+    sprPalDiv.querySelectorAll('.pal-color').forEach((d, i) => {
+        d.classList.toggle('fg-selected', i === sprColor);
+    });
+    document.getElementById('spr-color-info').textContent = sprColor + ' ' + MSX_PALETTE[sprColor][3];
+}
+updateSprPalette();
+
+function switchTab(tab) {
+    document.getElementById('tiles-tab').style.display = tab === 'tiles' ? '' : 'none';
+    document.getElementById('sprites-tab').style.display = tab === 'sprites' ? '' : 'none';
+    document.getElementById('right-panel').style.display = tab === 'tiles' ? '' : 'none';
+    document.getElementById('tab-tiles').classList.toggle('active', tab === 'tiles');
+    document.getElementById('tab-sprites').classList.toggle('active', tab === 'sprites');
+    if (tab === 'sprites') { drawSprGrid(); drawSprEditor(); drawSprPreview(); }
+}
+
+function setSprMode(m) {
+    sprMode = m;
+    document.getElementById('spr-mode-8').classList.toggle('active', m === 8);
+    document.getElementById('spr-mode-16').classList.toggle('active', m === 16);
+    if (m === 16) {
+        sprCurrentIdx = sprCurrentIdx & ~3; // align to 4-sprite boundary
+        sprEditCanvas.width = 256; sprEditCanvas.height = 256;
+    } else {
+        sprEditCanvas.width = 256; sprEditCanvas.height = 256;
+    }
+    drawSprGrid(); drawSprEditor(); drawSprPreview();
+    updateSprNum();
+}
+
+function updateSprNum() {
+    if (sprMode === 8)
+        document.getElementById('spr-current-num').textContent = sprCurrentIdx + ' (Set: ' + sprSets[sprCurrentSet].name + ')';
+    else
+        document.getElementById('spr-current-num').textContent = (sprCurrentIdx/4) + ' [16x16] (Set: ' + sprSets[sprCurrentSet].name + ')';
+}
+
+function drawSprGrid() {
+    const set = sprSets[sprCurrentSet];
+    const count = sprMode === 8 ? 32 : 8;
+    const cellSize = sprMode === 8 ? 48 : 96;
+    const cols = sprMode === 8 ? 8 : 4;
+    sprGridCanvas.width = cols * cellSize;
+    sprGridCanvas.height = (Math.ceil(count / cols)) * cellSize;
+    sprGridCtx.fillStyle = '#111';
+    sprGridCtx.fillRect(0, 0, sprGridCanvas.width, sprGridCanvas.height);
+
+    for (let idx = 0; idx < count; idx++) {
+        const gx = (idx % cols) * cellSize;
+        const gy = Math.floor(idx / cols) * cellSize;
+        const sprIdx = sprMode === 8 ? idx : idx * 4;
+        const col = set.colors[sprIdx];
+        const rgb = MSX_PALETTE[col];
+
+        if (sprMode === 8) {
+            // Draw 8x8 sprite scaled
+            const ps = (cellSize - 2) / 8;
+            for (let r = 0; r < 8; r++) {
+                const byte = set.sprites[sprIdx][r];
+                for (let b = 0; b < 8; b++) {
+                    if (byte & (128 >> b)) {
+                        sprGridCtx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                        sprGridCtx.fillRect(gx + 1 + b * ps, gy + 1 + r * ps, Math.ceil(ps), Math.ceil(ps));
+                    }
+                }
+            }
+        } else {
+            // Draw 16x16 sprite (4 sub-sprites in order TL=0,BL=1,TR=2,BR=3)
+            const subs = [sprIdx, sprIdx+1, sprIdx+2, sprIdx+3];
+            // MSX 16x16 layout: 0=TL, 1=BL, 2=TR, 3=BR
+            const offsets = [[0,0],[0,8],[8,0],[8,8]];
+            const ps16 = (cellSize - 2) / 16;
+            for (let s = 0; s < 4; s++) {
+                const ox = offsets[s][0], oy = offsets[s][1];
+                for (let r = 0; r < 8; r++) {
+                    const byte = set.sprites[subs[s]][r];
+                    for (let b = 0; b < 8; b++) {
+                        if (byte & (128 >> b)) {
+                            sprGridCtx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                            const px = gx + 1 + Math.floor((ox + b) * ps16);
+                            const py = gy + 1 + Math.floor((oy + r) * ps16);
+                            sprGridCtx.fillRect(px, py, Math.ceil(ps16), Math.ceil(ps16));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Highlight selected
+        const selIdx = sprMode === 8 ? sprCurrentIdx : sprCurrentIdx / 4;
+        if (idx === selIdx) {
+            sprGridCtx.strokeStyle = 'yellow';
+            sprGridCtx.lineWidth = 1;
+            sprGridCtx.strokeRect(gx + 0.5, gy + 0.5, cellSize - 1, cellSize - 1);
+        }
+    }
+}
+
+function drawSprEditor() {
+    const set = sprSets[sprCurrentSet];
+    const col = set.colors[sprCurrentIdx];
+    const rgb = MSX_PALETTE[col];
+    const size = sprMode === 8 ? 8 : 16;
+    const canvasSize = sprEditCanvas.width;
+    const ps = canvasSize / size;
+
+    // Checkerboard transparent background
+    for (let cy = 0; cy < size; cy++) {
+        for (let cx = 0; cx < size; cx++) {
+            sprEditCtx.fillStyle = ((cx + cy) & 1) ? '#2a2a2a' : '#1a1a1a';
+            sprEditCtx.fillRect(cx * ps, cy * ps, ps, ps);
+        }
+    }
+
+    if (sprMode === 8) {
+        const spr = set.sprites[sprCurrentIdx];
+        for (let r = 0; r < 8; r++)
+            for (let b = 0; b < 8; b++)
+                if (spr[r] & (128 >> b)) {
+                    sprEditCtx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                    sprEditCtx.fillRect(b * ps, r * ps, ps, ps);
+                }
+    } else {
+        const base = sprCurrentIdx;
+        const offsets = [[0,0],[0,8],[8,0],[8,8]];
+        for (let s = 0; s < 4; s++) {
+            const spr = set.sprites[base + s];
+            const ox = offsets[s][0], oy = offsets[s][1];
+            for (let r = 0; r < 8; r++)
+                for (let b = 0; b < 8; b++)
+                    if (spr[r] & (128 >> b)) {
+                        sprEditCtx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                        sprEditCtx.fillRect((ox+b)*ps, (oy+r)*ps, ps, ps);
+                    }
+        }
+        // Sub-sprite boundaries
+        sprEditCtx.strokeStyle = 'rgba(255,255,0,0.3)';
+        sprEditCtx.lineWidth = 2;
+        sprEditCtx.beginPath(); sprEditCtx.moveTo(canvasSize/2,0); sprEditCtx.lineTo(canvasSize/2,canvasSize); sprEditCtx.stroke();
+        sprEditCtx.beginPath(); sprEditCtx.moveTo(0,canvasSize/2); sprEditCtx.lineTo(canvasSize,canvasSize/2); sprEditCtx.stroke();
+        sprEditCtx.lineWidth = 1;
+    }
+
+    // Grid lines
+    sprEditCtx.strokeStyle = 'rgba(255,255,255,0.1)';
+    for (let i = 0; i <= size; i++) {
+        sprEditCtx.beginPath(); sprEditCtx.moveTo(i*ps,0); sprEditCtx.lineTo(i*ps,canvasSize); sprEditCtx.stroke();
+        sprEditCtx.beginPath(); sprEditCtx.moveTo(0,i*ps); sprEditCtx.lineTo(canvasSize,i*ps); sprEditCtx.stroke();
+    }
+}
+
+function drawSprPreview() {
+    const set = sprSets[sprCurrentSet];
+    const col = set.colors[sprCurrentIdx];
+    const rgb = MSX_PALETTE[col];
+    // Checkerboard background for transparency
+    for (let cy = 0; cy < 8; cy++)
+        for (let cx = 0; cx < 8; cx++) {
+            sprPrevCtx.fillStyle = ((cx+cy)&1) ? '#333' : '#222';
+            sprPrevCtx.fillRect(cx*8, cy*8, 8, 8);
+        }
+
+    if (sprMode === 8) {
+        const ps = 8;
+        const spr = set.sprites[sprCurrentIdx];
+        for (let r = 0; r < 8; r++)
+            for (let b = 0; b < 8; b++)
+                if (spr[r] & (128 >> b)) {
+                    sprPrevCtx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                    sprPrevCtx.fillRect(b*ps, r*ps, ps, ps);
+                }
+    } else {
+        const ps = 4;
+        const base = sprCurrentIdx;
+        const offsets = [[0,0],[0,8],[8,0],[8,8]];
+        for (let s = 0; s < 4; s++) {
+            const spr = set.sprites[base + s];
+            const ox = offsets[s][0], oy = offsets[s][1];
+            for (let r = 0; r < 8; r++)
+                for (let b = 0; b < 8; b++)
+                    if (spr[r] & (128 >> b)) {
+                        sprPrevCtx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                        sprPrevCtx.fillRect((ox+b)*ps, (oy+r)*ps, ps, ps);
+                    }
+        }
+    }
+}
+
+// Sprite editor mouse
+function sprEditPlace(e) {
+    const rect = sprEditCanvas.getBoundingClientRect();
+    const set = sprSets[sprCurrentSet];
+    let px, py;
+
+    if (sprMode === 8) {
+        const ps = sprEditCanvas.width / 8;
+        px = Math.floor((e.clientX - rect.left) / ps);
+        py = Math.floor((e.clientY - rect.top) / ps);
+        if (px < 0 || px >= 8 || py < 0 || py >= 8) return;
+        if (sprRightBtn || sprColor === 0) set.sprites[sprCurrentIdx][py] &= ~(128 >> px);
+        else set.sprites[sprCurrentIdx][py] |= (128 >> px);
+    } else {
+        const ps16 = sprEditCanvas.width / 16;
+        px = Math.floor((e.clientX - rect.left) / ps16);
+        py = Math.floor((e.clientY - rect.top) / ps16);
+        if (px < 0 || px >= 16 || py < 0 || py >= 16) return;
+        // Determine which sub-sprite: TL=0(0-7,0-7), BL=1(0-7,8-15), TR=2(8-15,0-7), BR=3(8-15,8-15)
+        let subIdx;
+        if (px < 8 && py < 8) subIdx = 0;
+        else if (px < 8 && py >= 8) subIdx = 1;
+        else if (px >= 8 && py < 8) subIdx = 2;
+        else subIdx = 3;
+        const localX = px & 7, localY = py & 7;
+        if (sprRightBtn || sprColor === 0) set.sprites[sprCurrentIdx + subIdx][localY] &= ~(128 >> localX);
+        else set.sprites[sprCurrentIdx + subIdx][localY] |= (128 >> localX);
+    }
+    drawSprEditor(); drawSprPreview(); drawSprGrid();
+}
+
+sprEditCanvas.addEventListener('mousedown', function(e) { e.preventDefault(); sprIsDrawing = true; sprRightBtn = (e.button === 2); sprEditPlace(e); });
+sprEditCanvas.addEventListener('mousemove', function(e) { if (sprIsDrawing) sprEditPlace(e); });
+sprEditCanvas.addEventListener('mouseup', function() { sprIsDrawing = false; });
+sprEditCanvas.addEventListener('mouseleave', function() { sprIsDrawing = false; });
+sprEditCanvas.addEventListener('contextmenu', function(e) { e.preventDefault(); });
+
+// Sprite grid click
+sprGridCanvas.addEventListener('mousedown', function(e) {
+    const rect = sprGridCanvas.getBoundingClientRect();
+    const cols = sprMode === 8 ? 16 : 8;
+    const cellSize = sprMode === 8 ? 10 : 20;
+    const tx = Math.floor((e.clientX - rect.left) / cellSize);
+    const ty = Math.floor((e.clientY - rect.top) / cellSize);
+    const idx = ty * cols + tx;
+    if (sprMode === 8) {
+        if (idx >= 0 && idx < 32) sprCurrentIdx = idx;
+    } else {
+        if (idx >= 0 && idx < 8) sprCurrentIdx = idx * 4;
+    }
+    sprColor = sprSets[sprCurrentSet].colors[sprCurrentIdx];
+    updateSprPalette(); updateSprNum(); drawSprGrid(); drawSprEditor(); drawSprPreview();
+});
+
+// Sprite operations
+function sprFlipH() {
+    const set = sprSets[sprCurrentSet];
+    const indices = sprMode === 8 ? [sprCurrentIdx] : [sprCurrentIdx, sprCurrentIdx+1, sprCurrentIdx+2, sprCurrentIdx+3];
+    indices.forEach(idx => {
+        for (let r = 0; r < 8; r++) {
+            let b = set.sprites[idx][r], rev = 0;
+            for (let i = 0; i < 8; i++) { rev |= ((b >> i) & 1) << (7 - i); }
+            set.sprites[idx][r] = rev;
+        }
+    });
+    if (sprMode === 16) {
+        // Swap TL<->TR (0<->2) and BL<->BR (1<->3)
+        let tmp;
+        tmp = set.sprites[sprCurrentIdx]; set.sprites[sprCurrentIdx] = set.sprites[sprCurrentIdx+2]; set.sprites[sprCurrentIdx+2] = tmp;
+        tmp = set.sprites[sprCurrentIdx+1]; set.sprites[sprCurrentIdx+1] = set.sprites[sprCurrentIdx+3]; set.sprites[sprCurrentIdx+3] = tmp;
+    }
+    drawSprEditor(); drawSprPreview(); drawSprGrid();
+}
+
+function sprFlipV() {
+    const set = sprSets[sprCurrentSet];
+    const indices = sprMode === 8 ? [sprCurrentIdx] : [sprCurrentIdx, sprCurrentIdx+1, sprCurrentIdx+2, sprCurrentIdx+3];
+    indices.forEach(idx => {
+        for (let r = 0; r < 4; r++) {
+            const tmp = set.sprites[idx][r];
+            set.sprites[idx][r] = set.sprites[idx][7-r];
+            set.sprites[idx][7-r] = tmp;
+        }
+    });
+    if (sprMode === 16) {
+        // Swap TL<->BL (0<->1) and TR<->BR (2<->3)
+        let tmp;
+        tmp = set.sprites[sprCurrentIdx]; set.sprites[sprCurrentIdx] = set.sprites[sprCurrentIdx+1]; set.sprites[sprCurrentIdx+1] = tmp;
+        tmp = set.sprites[sprCurrentIdx+2]; set.sprites[sprCurrentIdx+2] = set.sprites[sprCurrentIdx+3]; set.sprites[sprCurrentIdx+3] = tmp;
+    }
+    drawSprEditor(); drawSprPreview(); drawSprGrid();
+}
+
+function sprRotate() {
+    const set = sprSets[sprCurrentSet];
+    if (sprMode === 8) {
+        const spr = set.sprites[sprCurrentIdx];
+        const tmp = new Uint8Array(8);
+        for (let r = 0; r < 8; r++)
+            for (let b = 0; b < 8; b++)
+                if (spr[r] & (128 >> b)) tmp[b] |= (128 >> (7-r));
+        set.sprites[sprCurrentIdx] = tmp;
+    }
+    // 16x16 rotate is complex, skip for now
+    drawSprEditor(); drawSprPreview(); drawSprGrid();
+}
+
+function sprClear() {
+    const set = sprSets[sprCurrentSet];
+    const count = sprMode === 8 ? 1 : 4;
+    for (let i = 0; i < count; i++) set.sprites[sprCurrentIdx + i] = new Uint8Array(8);
+    drawSprEditor(); drawSprPreview(); drawSprGrid();
+}
+
+function sprInvert() {
+    const set = sprSets[sprCurrentSet];
+    const count = sprMode === 8 ? 1 : 4;
+    for (let i = 0; i < count; i++)
+        for (let r = 0; r < 8; r++) set.sprites[sprCurrentIdx + i][r] ^= 0xFF;
+    drawSprEditor(); drawSprPreview(); drawSprGrid();
+}
+
+function sprPrev() {
+    if (sprMode === 8) { sprCurrentIdx = (sprCurrentIdx - 1 + 32) % 32; }
+    else { sprCurrentIdx = ((sprCurrentIdx / 4 - 1 + 8) % 8) * 4; }
+    sprColor = sprSets[sprCurrentSet].colors[sprCurrentIdx];
+    updateSprPalette(); updateSprNum(); drawSprGrid(); drawSprEditor(); drawSprPreview();
+}
+
+function sprNext() {
+    if (sprMode === 8) { sprCurrentIdx = (sprCurrentIdx + 1) % 32; }
+    else { sprCurrentIdx = ((sprCurrentIdx / 4 + 1) % 8) * 4; }
+    sprColor = sprSets[sprCurrentSet].colors[sprCurrentIdx];
+    updateSprPalette(); updateSprNum(); drawSprGrid(); drawSprEditor(); drawSprPreview();
+}
+
+// Export/Import
+function sprExportJSON() {
+    const data = {
+        sets: sprSets.map(set => ({
+            name: set.name,
+            sprites: set.sprites.map(s => Array.from(s)),
+            colors: set.colors.slice()
+        }))
+    };
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], {type:'application/json'}));
+    a.download = 'sprites.json';
+    a.click();
+}
+
+function sprImportJSON() {
+    const input = document.createElement('input');
+    input.type = 'file'; input.accept = '.json';
+    input.onchange = function(e) {
+        const reader = new FileReader();
+        reader.onload = function(ev) {
+            try {
+                const data = JSON.parse(ev.target.result);
+                sprSets = data.sets.map(s => ({
+                    name: s.name,
+                    sprites: s.sprites.map(arr => new Uint8Array(arr)),
+                    colors: s.colors
+                }));
+                sprCurrentSet = 0; sprCurrentIdx = 0;
+                sprColor = sprSets[0].colors[0];
+                updateSprPalette(); updateSprNum(); drawSprGrid(); drawSprEditor(); drawSprPreview();
+            } catch(err) { alert('Error: ' + err.message); }
+        };
+        reader.readAsText(e.target.files[0]);
+    };
+    input.click();
+}
+
+// Set management
+function sprUpdateSetSelect() {
+    const sel = document.getElementById('spr-set-select');
+    sel.innerHTML = '';
+    sprSets.forEach((s, i) => {
+        const opt = document.createElement('option');
+        opt.value = i; opt.textContent = s.name;
+        if (i === sprCurrentSet) opt.selected = true;
+        sel.appendChild(opt);
+    });
+}
+
+function sprChangeSet(idx) {
+    sprCurrentSet = parseInt(idx);
+    sprCurrentIdx = 0;
+    sprColor = sprSets[sprCurrentSet].colors[0];
+    updateSprPalette(); updateSprNum(); drawSprGrid(); drawSprEditor(); drawSprPreview();
+}
+
+function sprAddSet() {
+    const name = prompt('Set name:', 'Set ' + sprSets.length);
+    if (!name) return;
+    const newSet = { name: name, sprites: [], colors: [] };
+    initSprSet(newSet);
+    sprSets.push(newSet);
+    sprCurrentSet = sprSets.length - 1;
+    sprCurrentIdx = 0;
+    sprUpdateSetSelect(); updateSprNum(); drawSprGrid(); drawSprEditor(); drawSprPreview();
+}
+
+function sprRenameSet() {
+    const name = prompt('New name:', sprSets[sprCurrentSet].name);
+    if (!name) return;
+    sprSets[sprCurrentSet].name = name;
+    sprUpdateSetSelect();
+}
+
+function sprDeleteSet() {
+    if (sprSets.length <= 1) { alert('Cannot delete last set'); return; }
+    if (!confirm('Delete "' + sprSets[sprCurrentSet].name + '"?')) return;
+    sprSets.splice(sprCurrentSet, 1);
+    sprCurrentSet = 0; sprCurrentIdx = 0;
+    sprUpdateSetSelect(); updateSprNum(); drawSprGrid(); drawSprEditor(); drawSprPreview();
+}
+
+sprUpdateSetSelect();
+
+function sprExportBin() {
+    const set = sprSets[sprCurrentSet];
+    // Format: 256 bytes patterns (32 x 8) + 32 bytes colors = 288 bytes
+    const buf = new Uint8Array(288);
+    for (let i = 0; i < 32; i++) {
+        for (let r = 0; r < 8; r++) buf[i * 8 + r] = set.sprites[i][r];
+        buf[256 + i] = set.colors[i];
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([buf], {type:'application/octet-stream'}));
+    a.download = set.name.replace(/\s+/g, '_') + '.bin';
+    a.click();
+}
+
+function sprExportC() {
+    const set = sprSets[sprCurrentSet];
+    let out = '// Sprite data: 32 sprites x 8 bytes + 32 color bytes\n';
+    out += 'static const u8 g_SpritePatterns[32][8] = {\n';
+    for (let i = 0; i < 32; i++) {
+        out += '    { ' + Array.from(set.sprites[i]).map(b => '0x' + b.toString(16).toUpperCase().padStart(2,'0')).join(', ') + ' },';
+        out += ' // sprite ' + i + '\n';
+    }
+    out += '};\n\n';
+    out += 'static const u8 g_SpriteColors[32] = {\n    ';
+    out += set.colors.map(c => c.toString()).join(', ');
+    out += '\n};\n';
+    document.getElementById('spr-output').value = out;
+    document.getElementById('spr-output').scrollIntoView();
+    document.getElementById('spr-output').select();
+}
+
+// Import full image: extract unique tiles as tileset + generate map
+function importImage() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.png,.bmp,.jpg,.jpeg';
+    input.onchange = function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = function(ev) {
+            const img = new Image();
+            img.onload = function() {
+                const w = img.width, h = img.height;
+                if (w % 8 !== 0 || h % 8 !== 0) {
+                    alert('Image dimensions must be multiples of 8.\nGot: ' + w + 'x' + h);
+                    return;
+                }
+                const cols = w / 8, rows = h / 8;
+
+                // Draw image to temp canvas to read pixels
+                const tmpCanvas = document.createElement('canvas');
+                tmpCanvas.width = w; tmpCanvas.height = h;
+                const tmpCtx = tmpCanvas.getContext('2d');
+                tmpCtx.drawImage(img, 0, 0);
+                const imgData = tmpCtx.getImageData(0, 0, w, h);
+                const px = imgData.data;
+
+                // Extract unique tiles
+                const tileHashes = new Map();
+                const uniqueTiles = [];
+                const tileMapArr = [];
+
+                for (let ty = 0; ty < rows; ty++) {
+                    for (let tx = 0; tx < cols; tx++) {
+                        // Build hash from 8x8 pixels
+                        const hashParts = [];
+                        for (let y = 0; y < 8; y++) {
+                            for (let x = 0; x < 8; x++) {
+                                const idx = ((ty * 8 + y) * w + (tx * 8 + x)) * 4;
+                                hashParts.push(px[idx], px[idx+1], px[idx+2]);
+                            }
+                        }
+                        const hash = hashParts.join(',');
+
+                        let tileIdx;
+                        if (tileHashes.has(hash)) {
+                            tileIdx = tileHashes.get(hash);
+                        } else {
+                            tileIdx = uniqueTiles.length;
+                            tileHashes.set(hash, tileIdx);
+                            // Store pixel data for this tile
+                            const tileData = [];
+                            for (let y = 0; y < 8; y++)
+                                for (let x = 0; x < 8; x++) {
+                                    const idx = ((ty * 8 + y) * w + (tx * 8 + x)) * 4;
+                                    tileData.push(px[idx], px[idx+1], px[idx+2], 255);
+                                }
+                            uniqueTiles.push(tileData);
+                        }
+                        tileMapArr.push(tileIdx);
+                    }
+                }
+
+                if (uniqueTiles.length > 256) {
+                    alert('WARNING: ' + uniqueTiles.length + ' unique tiles (max 256 for MSX).\nProceeding anyway.');
+                }
+
+                // Move darkest tile to index 0
+                let darkIdx = 0, darkSum = Infinity;
+                for (let ti = 0; ti < uniqueTiles.length; ti++) {
+                    let sum = 0;
+                    for (let p = 0; p < 256; p += 4) sum += uniqueTiles[ti][p] + uniqueTiles[ti][p+1] + uniqueTiles[ti][p+2];
+                    if (sum < darkSum) { darkSum = sum; darkIdx = ti; }
+                }
+                if (darkIdx > 0) {
+                    // Swap tile data
+                    const tmp = uniqueTiles[0];
+                    uniqueTiles[0] = uniqueTiles[darkIdx];
+                    uniqueTiles[darkIdx] = tmp;
+                    // Remap all references
+                    for (let mi = 0; mi < tileMapArr.length; mi++) {
+                        if (tileMapArr[mi] === 0) tileMapArr[mi] = darkIdx;
+                        else if (tileMapArr[mi] === darkIdx) tileMapArr[mi] = 0;
+                    }
+                }
+
+                // Build tileset canvas (32 cols x N rows)
+                const TSET_C = 32;
+                const TSET_R = Math.max(Math.ceil(uniqueTiles.length / TSET_C), 1);
+                const tsetCanvas = document.createElement('canvas');
+                tsetCanvas.width = TSET_C * 8;
+                tsetCanvas.height = TSET_R * 8;
+                const tsetCtx2 = tsetCanvas.getContext('2d');
+                tsetCtx2.fillStyle = '#000';
+                tsetCtx2.fillRect(0, 0, tsetCanvas.width, tsetCanvas.height);
+
+                for (let i = 0; i < uniqueTiles.length; i++) {
+                    const tx2 = (i % TSET_C) * 8;
+                    const ty2 = Math.floor(i / TSET_C) * 8;
+                    const id = tsetCtx2.createImageData(8, 8);
+                    for (let j = 0; j < 256; j++) id.data[j] = uniqueTiles[i][j];
+                    tsetCtx2.putImageData(id, tx2, ty2);
+                }
+
+                // Apply as current tileset
+                TSET_ROWS = TSET_R;
+                tilesetCanvas2D = tsetCanvas;
+                tilesetImg = tsetCanvas;
+
+                // Apply map
+                for (let i = 0; i < COLS * ROWS && i < tileMapArr.length; i++)
+                    screenMap[i] = tileMapArr[i];
+
+                // Resize tileset display canvas
+                document.getElementById('tileset-canvas').height = TSET_ROWS * TILE_H * SCALE;
+                selectedTile = 0;
+                drawTileset(); drawScreen(); updateSelected();
+                loadTileToEditor(0);
+                markTilesetDirty();
+
+                alert('Imported: ' + uniqueTiles.length + ' unique tiles, ' + cols + 'x' + rows + ' map');
+            };
+            img.src = ev.target.result;
+        };
+        reader.readAsDataURL(file);
+    };
+    input.click();
+}
+
+// Export a rectangular region of the map
+function exportRegion() {
+    const input = prompt('Region coordinates (x1,y1,x2,y2):', '0,0,10,4');
+    if (!input) return;
+    const parts = input.split(',').map(s => parseInt(s.trim()));
+    if (parts.length !== 4 || parts.some(isNaN)) { alert('Format: x1,y1,x2,y2'); return; }
+    const [x1, y1, x2, y2] = parts;
+    const w = x2 - x1 + 1;
+    const h = y2 - y1 + 1;
+    if (w < 1 || h < 1 || x1 < 0 || y1 < 0 || x2 >= COLS || y2 >= ROWS) {
+        alert('Invalid region! Map is ' + COLS + 'x' + ROWS);
+        return;
+    }
+
+    // Extract region tiles
+    const tiles = [];
+    for (let y = y1; y <= y2; y++)
+        for (let x = x1; x <= x2; x++)
+            tiles.push(screenMap[y * COLS + x]);
+
+    // Generate C array
+    let cOut = '// Region (' + x1 + ',' + y1 + ') to (' + x2 + ',' + y2 + ') = ' + w + 'x' + h + '\n';
+    cOut += 'static const u8 g_Region[' + tiles.length + '] = {\n';
+    for (let y = 0; y < h; y++) {
+        cOut += '    ';
+        for (let x = 0; x < w; x++) {
+            cOut += tiles[y * w + x];
+            if (y < h - 1 || x < w - 1) cOut += ',';
+        }
+        cOut += '\n';
+    }
+    cOut += '};\n';
+
+    // Also generate JSON
+    const jsonData = { x: x1, y: y1, width: w, height: h, tiles: tiles };
+
+    // Show in output textarea
+    const ta = document.getElementById('output');
+    ta.value = cOut + '\n// JSON:\n// ' + JSON.stringify(jsonData);
+    ta.select();
+
+    // Also download JSON
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([JSON.stringify(jsonData)], {type: 'application/json'}));
+    a.download = 'region_' + x1 + '_' + y1 + '_' + x2 + '_' + y2 + '.json';
+    a.click();
+}
+
+// Optimize: deduplicate tiles, tile 0 = black
+function optimizeTiles() {
+    if (!tilesetCanvas2D) { alert('No tileset loaded'); return; }
+    const ctx = tilesetCanvas2D.getContext('2d');
+    const totalTiles = TSET_COLS * TSET_ROWS;
+
+    // Step 1: Read all tiles
+    const tiles = []; // array of {data: ImageData, hash: string, brightness: number}
+    for (let i = 0; i < totalTiles; i++) {
+        const tx = (i % TSET_COLS) * 8, ty = Math.floor(i / TSET_COLS) * 8;
+        const id = ctx.getImageData(tx, ty, 8, 8);
+        let brightness = 0;
+        for (let p = 0; p < 256; p += 4) brightness += id.data[p] + id.data[p+1] + id.data[p+2];
+        tiles.push({ data: id, hash: Array.from(id.data).join(','), brightness: brightness });
+    }
+
+    // Step 2: Deduplicate — keep first occurrence of each unique hash
+    const seen = new Map(); // hash -> new index
+    const uniqueTiles = []; // ordered list of unique tile data
+    const oldToNew = new Array(totalTiles); // remap old index -> new index
+
+    for (let i = 0; i < totalTiles; i++) {
+        if (seen.has(tiles[i].hash)) {
+            oldToNew[i] = seen.get(tiles[i].hash);
+        } else {
+            const idx = uniqueTiles.length;
+            seen.set(tiles[i].hash, idx);
+            uniqueTiles.push(tiles[i]);
+            oldToNew[i] = idx;
+        }
+    }
+
+    if (uniqueTiles.length === totalTiles) {
+        alert('No duplicates found!');
+        return;
+    }
+
+    // Step 3: Force tile 0 = pure black (create it if needed)
+    // Check if tile 0 is already the darkest
+    let darkI = 0;
+    for (let i = 1; i < uniqueTiles.length; i++) {
+        if (uniqueTiles[i].brightness < uniqueTiles[darkI].brightness) darkI = i;
+    }
+    alert('Darkest tile at index ' + darkI + ' (brightness=' + uniqueTiles[darkI].brightness + ')\nTile 0 brightness=' + uniqueTiles[0].brightness + '\nUnique tiles: ' + uniqueTiles.length);
+    if (darkI !== 0) {
+        // Create a new ordered array: darkest first, rest follows
+        const reordered = [];
+        const newOrder = new Array(uniqueTiles.length);
+        reordered.push(uniqueTiles[darkI]);
+        newOrder[darkI] = 0;
+        let idx = 1;
+        for (let i = 0; i < uniqueTiles.length; i++) {
+            if (i !== darkI) {
+                reordered.push(uniqueTiles[i]);
+                newOrder[i] = idx++;
+            }
+        }
+        // Remap oldToNew through newOrder
+        for (let i = 0; i < totalTiles; i++) {
+            oldToNew[i] = newOrder[oldToNew[i]];
+        }
+        // Replace uniqueTiles
+        uniqueTiles.length = 0;
+        for (let i = 0; i < reordered.length; i++) uniqueTiles.push(reordered[i]);
+    }
+
+    const removed = totalTiles - uniqueTiles.length;
+
+    // Step 4: Build new canvas
+    const newRows = Math.max(Math.ceil(uniqueTiles.length / TSET_COLS), 1);
+    const newCanvas = document.createElement('canvas');
+    newCanvas.width = TSET_COLS * 8;
+    newCanvas.height = newRows * 8;
+    const newCtx = newCanvas.getContext('2d');
+    newCtx.fillStyle = '#000';
+    newCtx.fillRect(0, 0, newCanvas.width, newCanvas.height);
+    for (let i = 0; i < uniqueTiles.length; i++) {
+        newCtx.putImageData(uniqueTiles[i].data, (i % TSET_COLS) * 8, Math.floor(i / TSET_COLS) * 8);
+    }
+
+    // Step 5: Remap screen map
+    for (let i = 0; i < COLS * ROWS; i++) {
+        if (screenMap[i] < totalTiles) screenMap[i] = oldToNew[screenMap[i]];
+    }
+
+    // Apply
+    TSET_ROWS = newRows;
+    tilesetCanvas2D = newCanvas;
+    tilesetImg = newCanvas;
+    document.getElementById('tileset-canvas').height = TSET_ROWS * TILE_H * SCALE;
+    selectedTile = 0;
+    drawTileset(); drawScreen(); updateSelected();
+    loadTileToEditor(0);
+    markTilesetDirty();
+
+    alert('Removed ' + removed + ' duplicate tiles.\n' + uniqueIndices.length + ' unique tiles remain.');
+}
+
+function hideCtxMenu() { const m = document.getElementById('tile-ctx-menu'); if (m) m.style.display = 'none'; }
+document.addEventListener('mousedown', function(e) { if (!e.target.closest('#tile-ctx-menu')) hideCtxMenu(); });
+
+// Keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.ctrlKey && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        undoPop();
+    } else if (e.ctrlKey && (e.key === 'c' || e.key === 'C')) {
+        e.preventDefault();
+        // Ctrl+C: group copy (tiles or map, whichever has selection)
+        if (tileSelStart >= 0) groupTileCopy();
+        if (mapSelX1 >= 0) groupMapCopy();
+    } else if (e.ctrlKey && (e.key === 'v' || e.key === 'V')) {
+        e.preventDefault();
+        // Ctrl+V: group paste
+        if (tileGroupClipboard) groupTilePaste();
+        if (mapGroupClipboard && mapSelX1 >= 0) {
+            const r = mapSelRect();
+            groupMapPaste(r.x1, r.y1);
+        }
+    } else if (e.key === 'c' || e.key === 'C') {
+        tileCopy(); // single tile copy
+    } else if (e.key === 'v' || e.key === 'V') {
+        tilePaste(); // single tile paste
+    } else if (e.key === 'Escape') {
+        // Clear all selections
+        tileSelStart = -1; tileSelEnd = -1;
+        mapSelX1 = -1; mapSelY1 = -1;
+        drawTileset(); drawScreen();
+    }
+});
+
+</script>
+</body>
+</html>

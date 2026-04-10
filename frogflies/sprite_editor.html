@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Frog Sprites — 16x16 Editor</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #222; color: #eee; font-family: monospace; display: flex; gap: 20px; padding: 20px; }
+.panel { background: #333; padding: 15px; border-radius: 8px; }
+h3 { color: #ff0; margin-bottom: 10px; font-size: 14px; }
+canvas { image-rendering: pixelated; cursor: crosshair; border: 2px solid #555; border-radius: 4px; }
+button { background: #555; color: #fff; border: 1px solid #777; padding: 6px 14px; margin: 3px; cursor: pointer; font-family: monospace; border-radius: 4px; }
+button:hover { background: #777; }
+button.active { background: #f80; color: #000; }
+textarea { background: #111; color: #0f0; border: 1px solid #555; width: 100%; height: 200px; font-family: monospace; font-size: 11px; margin-top: 10px; border-radius: 4px; padding: 8px; }
+.color-row { display: flex; gap: 3px; margin: 5px 0; flex-wrap: wrap; }
+.pal { width: 24px; height: 24px; border: 2px solid #333; cursor: pointer; border-radius: 3px; }
+.pal.active { border-color: #ff0; box-shadow: 0 0 6px #ff0; }
+.preview { border: 1px solid #555; margin: 5px 0; }
+.sprite-select { display: flex; gap: 10px; margin-bottom: 10px; }
+.sprite-select button { flex: 1; }
+</style>
+</head>
+<body>
+
+<div class="panel">
+    <h3>SPRITE EDITOR 16x16</h3>
+    <div class="sprite-select">
+        <button id="btn-s0" class="active" onclick="selectSprite(0)">RANA QUIETA</button>
+        <button id="btn-s1" onclick="selectSprite(1)">RANA SALTANDO</button>
+    </div>
+    <canvas id="editor" width="320" height="320"></canvas>
+    <div style="margin-top:10px">
+        <button onclick="clearSprite()">Limpiar</button>
+        <button onclick="flipH()">Flip H</button>
+        <button onclick="flipV()">Flip V</button>
+    </div>
+</div>
+
+<div class="panel">
+    <h3>COLOR</h3>
+    <div class="color-row" id="palette"></div>
+    <p style="font-size:11px;color:#aaa;margin-top:5px">Click izq = pintar, Click der = borrar</p>
+
+    <h3 style="margin-top:15px">PREVIEW (1x)</h3>
+    <canvas id="preview0" class="preview" width="16" height="16" style="width:64px;height:64px"></canvas>
+    <canvas id="preview1" class="preview" width="16" height="16" style="width:64px;height:64px"></canvas>
+
+    <h3 style="margin-top:15px">PREVIEW (escena)</h3>
+    <canvas id="scene" width="256" height="64" style="width:256px;height:64px;border:1px solid #555"></canvas>
+
+    <h3 style="margin-top:15px">EXPORTAR C</h3>
+    <button onclick="exportC()">Generar C Array</button>
+    <button onclick="exportJSON()">Guardar JSON</button>
+    <button onclick="importJSON()">Cargar JSON</button>
+    <textarea id="output" readonly></textarea>
+</div>
+
+<script>
+const TILE = 20; // pixel size in editor
+const W = 16, H = 16;
+const canvas = document.getElementById('editor');
+const ctx = canvas.getContext('2d');
+
+// MSX palette
+const MSX_PAL = [
+    [0,0,0],[0,0,0],[33,200,66],[94,220,120],
+    [84,85,237],[125,118,252],[212,82,77],[66,235,245],
+    [252,85,84],[255,121,120],[212,193,84],[230,206,128],
+    [33,176,59],[201,91,186],[204,204,204],[255,255,255]
+];
+
+let currentSprite = 0;
+let currentColor = 3; // default: light green
+let sprites = [
+    Array.from({length: 16}, () => new Array(16).fill(0)),
+    Array.from({length: 16}, () => new Array(16).fill(0)),
+];
+
+// Build palette
+const palDiv = document.getElementById('palette');
+MSX_PAL.forEach((c, i) => {
+    const d = document.createElement('div');
+    d.className = 'pal' + (i === currentColor ? ' active' : '');
+    d.style.background = `rgb(${c[0]},${c[1]},${c[2]})`;
+    d.onclick = () => { currentColor = i; document.querySelectorAll('.pal').forEach((p,j) => p.classList.toggle('active', j===i)); };
+    d.title = i + ': ' + ['Trans','Black','Green','LtGreen','DkBlue','LtBlue','DkRed','Cyan','Red','LtRed','DkYellow','Yellow','DkGreen','Magenta','Gray','White'][i];
+    palDiv.appendChild(d);
+});
+
+function selectSprite(idx) {
+    currentSprite = idx;
+    document.getElementById('btn-s0').classList.toggle('active', idx === 0);
+    document.getElementById('btn-s1').classList.toggle('active', idx === 1);
+    draw();
+}
+
+function draw() {
+    const s = sprites[currentSprite];
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Grid
+    for(let y = 0; y < H; y++) {
+        for(let x = 0; x < W; x++) {
+            const c = s[y][x];
+            const rgb = MSX_PAL[c];
+            ctx.fillStyle = c === 0 ? '#111' : `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+            ctx.fillRect(x * TILE, y * TILE, TILE - 1, TILE - 1);
+        }
+    }
+
+    // Grid lines
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 0.5;
+    for(let i = 0; i <= 16; i++) {
+        ctx.beginPath(); ctx.moveTo(i * TILE, 0); ctx.lineTo(i * TILE, H * TILE); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, i * TILE); ctx.lineTo(W * TILE, i * TILE); ctx.stroke();
+    }
+    // 8x8 quadrant lines
+    ctx.strokeStyle = '#666';
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(8 * TILE, 0); ctx.lineTo(8 * TILE, H * TILE); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, 8 * TILE); ctx.lineTo(W * TILE, 8 * TILE); ctx.stroke();
+
+    drawPreviews();
+}
+
+function drawPreviews() {
+    for(let si = 0; si < 2; si++) {
+        const pctx = document.getElementById('preview' + si).getContext('2d');
+        pctx.fillStyle = '#000';
+        pctx.fillRect(0, 0, 16, 16);
+        const s = sprites[si];
+        for(let y = 0; y < 16; y++)
+            for(let x = 0; x < 16; x++) {
+                if(s[y][x] === 0) continue;
+                const rgb = MSX_PAL[s[y][x]];
+                pctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                pctx.fillRect(x, y, 1, 1);
+            }
+    }
+
+    // Scene preview
+    const sctx = document.getElementById('scene').getContext('2d');
+    sctx.fillStyle = '#4455DD'; // sky
+    sctx.fillRect(0, 0, 256, 40);
+    sctx.fillStyle = '#22AA44'; // ground
+    sctx.fillRect(0, 40, 256, 24);
+    sctx.fillStyle = '#1144AA'; // water
+    sctx.fillRect(0, 50, 256, 14);
+    // Lily pads
+    sctx.fillStyle = '#33CC33';
+    sctx.fillRect(40, 42, 40, 6);
+    sctx.fillRect(170, 42, 40, 6);
+
+    // Draw sprites on scene
+    for(let si = 0; si < 2; si++) {
+        const s = sprites[si];
+        const ox = si === 0 ? 48 : 178;
+        const oy = 28;
+        for(let y = 0; y < 16; y++)
+            for(let x = 0; x < 16; x++) {
+                if(s[y][x] === 0) continue;
+                const rgb = MSX_PAL[s[y][x]];
+                sctx.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+                sctx.fillRect(ox + x, oy + y, 1, 1);
+            }
+    }
+}
+
+let painting = false;
+let erasing = false;
+
+canvas.addEventListener('mousedown', (e) => {
+    if(e.button === 2) { erasing = true; painting = false; }
+    else { painting = true; erasing = false; }
+    paint(e);
+});
+canvas.addEventListener('mousemove', (e) => { if(painting || erasing) paint(e); });
+canvas.addEventListener('mouseup', () => { painting = false; erasing = false; });
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function paint(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / TILE);
+    const y = Math.floor((e.clientY - rect.top) / TILE);
+    if(x < 0 || x >= 16 || y < 0 || y >= 16) return;
+    sprites[currentSprite][y][x] = erasing ? 0 : currentColor;
+    draw();
+}
+
+function clearSprite() {
+    sprites[currentSprite] = Array.from({length: 16}, () => new Array(16).fill(0));
+    draw();
+}
+
+function flipH() {
+    const s = sprites[currentSprite];
+    for(let y = 0; y < 16; y++) s[y].reverse();
+    draw();
+}
+
+function flipV() {
+    sprites[currentSprite].reverse();
+    draw();
+}
+
+function exportC() {
+    let out = '';
+    const names = ['SPR_FROG_IDLE', 'SPR_FROG_JUMP'];
+
+    for(let si = 0; si < 2; si++) {
+        const s = sprites[si];
+        // MSX sprite 16x16: stored as 4 quadrants of 8x8
+        // First 8 bytes: top-left column (rows 0-7, cols 0-7)
+        // Next 8 bytes: bottom-left (rows 8-15, cols 0-7)
+        // Next 8 bytes: top-right (rows 0-7, cols 8-15)
+        // Next 8 bytes: bottom-right (rows 8-15, cols 8-15)
+
+        const bytes = new Array(32).fill(0);
+        for(let y = 0; y < 16; y++) {
+            for(let x = 0; x < 16; x++) {
+                if(s[y][x] === 0) continue;
+                let byteIdx, bitIdx;
+                if(x < 8 && y < 8) { byteIdx = y; bitIdx = 7 - x; }
+                else if(x < 8 && y >= 8) { byteIdx = 8 + (y - 8); bitIdx = 7 - x; }
+                else if(x >= 8 && y < 8) { byteIdx = 16 + y; bitIdx = 7 - (x - 8); }
+                else { byteIdx = 24 + (y - 8); bitIdx = 7 - (x - 8); }
+                bytes[byteIdx] |= (1 << bitIdx);
+            }
+        }
+
+        out += `static const u8 ${names[si]}[32] = {\n`;
+        out += '    ';
+        for(let i = 0; i < 32; i++) {
+            out += '0x' + bytes[i].toString(16).toUpperCase().padStart(2, '0');
+            if(i < 31) out += ',';
+            if(i === 7 || i === 15 || i === 23) out += '\n    ';
+        }
+        out += '\n};\n\n';
+
+        // Color info
+        out += `// ${names[si]} uses color ${currentColor} (MSX palette)\n\n`;
+    }
+
+    document.getElementById('output').value = out;
+}
+
+function exportJSON() {
+    const json = JSON.stringify(sprites);
+    const blob = new Blob([json], {type: 'application/json'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'frog_sprites.json';
+    a.click();
+}
+
+function importJSON() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json';
+    input.onchange = (e) => {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+            sprites = JSON.parse(ev.target.result);
+            draw();
+        };
+        reader.readAsText(e.target.files[0]);
+    };
+    input.click();
+}
+
+draw();
+</script>
+</body>
+</html>

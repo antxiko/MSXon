@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Frog & Flies — Platform Editor</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #222; color: #eee; font-family: monospace; padding: 20px; }
+canvas { image-rendering: pixelated; border: 2px solid #555; cursor: crosshair; }
+h3 { color: #ff0; margin: 10px 0; }
+button { background: #555; color: #fff; border: 1px solid #777; padding: 6px 14px; margin: 3px; cursor: pointer; font-family: monospace; border-radius: 4px; }
+button:hover { background: #777; }
+textarea { background: #111; color: #0f0; border: 1px solid #555; width: 600px; height: 150px; font-family: monospace; font-size: 11px; margin-top: 10px; padding: 8px; }
+.info { color: #aaa; font-size: 12px; margin: 5px 0; }
+.platform { margin: 5px 0; font-size: 13px; }
+.p0 { color: #0f0; }
+.p1 { color: #f00; }
+.p2 { color: #ff0; }
+.p3 { color: #f0f; }
+</style>
+</head>
+<body>
+
+<h3>FROG & FLIES — PLATFORM EDITOR</h3>
+<p class="info">Click en la pantalla para colocar las 4 plataformas (nenufares) donde se posan las ranas.<br>
+Cada click coloca la siguiente plataforma. El punto marca el centro X del nenufar y la linea Y donde aterriza la rana.</p>
+
+<canvas id="canvas" width="768" height="576"></canvas>
+
+<div>
+    <button onclick="resetPlatforms()">Reset</button>
+    <button onclick="exportC()">Exportar C</button>
+</div>
+
+<div id="platforms"></div>
+
+<textarea id="output" readonly></textarea>
+
+<script>
+const SCALE = 3;
+const W = 256, H = 192;
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+canvas.width = W * SCALE;
+canvas.height = H * SCALE;
+
+// Load screen_layout.json + tileset.png to render preview
+let screenTiles = null;
+let tilesetImg = null;
+
+// MSX palette
+const PAL = [
+    [0,0,0],[0,0,0],[33,200,66],[94,220,120],
+    [84,85,237],[125,118,252],[212,82,77],[66,235,245],
+    [252,85,84],[255,121,120],[212,193,84],[230,206,128],
+    [33,176,59],[201,91,186],[204,204,204],[255,255,255]
+];
+
+const platforms = [
+    { x: -1, y: -1 },
+    { x: -1, y: -1 },
+    { x: -1, y: -1 },
+    { x: -1, y: -1 },
+];
+let currentPlatform = 0;
+
+const COLORS = ['#00ff00', '#ff0000', '#ffff00', '#ff00ff'];
+const NAMES = ['P1 (verde)', 'P2 (rojo)', 'P3 (amarillo)', 'P4 (magenta)'];
+
+// Try to load tileset and screen layout
+const img = new Image();
+img.onload = () => { tilesetImg = img; tryDraw(); };
+img.src = 'tileset.png';
+
+fetch('screen_layout.json').then(r => r.json()).then(data => {
+    screenTiles = data.tiles;
+    tryDraw();
+}).catch(() => {});
+
+function tryDraw() {
+    if (!tilesetImg || !screenTiles) return;
+    drawScreen();
+}
+
+function drawScreen() {
+    // Create offscreen canvas for tileset
+    const tc = document.createElement('canvas');
+    tc.width = tilesetImg.width;
+    tc.height = tilesetImg.height;
+    const tctx = tc.getContext('2d');
+    tctx.drawImage(tilesetImg, 0, 0);
+
+    const tilesPerRow = Math.floor(tilesetImg.width / 8);
+
+    // Draw each tile
+    const offscreen = document.createElement('canvas');
+    offscreen.width = W;
+    offscreen.height = H;
+    const octx = offscreen.getContext('2d');
+    octx.imageSmoothingEnabled = false;
+
+    for(let ty = 0; ty < 24; ty++) {
+        for(let tx = 0; tx < 32; tx++) {
+            const idx = ty * 32 + tx;
+            const tileId = (idx < screenTiles.length) ? screenTiles[idx] : 0;
+            const srcX = (tileId % tilesPerRow) * 8;
+            const srcY = Math.floor(tileId / tilesPerRow) * 8;
+            octx.drawImage(tc, srcX, srcY, 8, 8, tx * 8, ty * 8, 8, 8);
+        }
+    }
+
+    // Scale up
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(offscreen, 0, 0, W, H, 0, 0, W * SCALE, H * SCALE);
+
+    // Draw platforms (5 tiles = 40 pixels wide)
+    const PLAT_W = 40; // 5 tiles * 8 pixels
+    for(let i = 0; i < 4; i++) {
+        if(platforms[i].x < 0) continue;
+        const px = platforms[i].x * SCALE;
+        const py = platforms[i].y * SCALE;
+        const pw = PLAT_W * SCALE;
+
+        // Platform rectangle
+        ctx.strokeStyle = COLORS[i];
+        ctx.lineWidth = 2;
+        ctx.strokeRect(px - pw/2, py - 4*SCALE, pw, 8*SCALE);
+
+        // Fill with transparent color
+        ctx.fillStyle = COLORS[i] + '33';
+        ctx.fillRect(px - pw/2, py - 4*SCALE, pw, 8*SCALE);
+
+        // Center crosshair
+        ctx.beginPath();
+        ctx.moveTo(px, py - 10); ctx.lineTo(px, py + 10);
+        ctx.stroke();
+
+        // Landing line
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(px - pw/2, py); ctx.lineTo(px + pw/2, py);
+        ctx.stroke();
+
+        // Label
+        ctx.fillStyle = COLORS[i];
+        ctx.font = '14px monospace';
+        ctx.fillText('P' + (i+1), px + pw/2 + 5, py + 5);
+    }
+
+    // Highlight next platform to place
+    if(currentPlatform < 4) {
+        ctx.fillStyle = COLORS[currentPlatform] + '44';
+        ctx.font = '16px monospace';
+        ctx.fillText('Click para colocar ' + NAMES[currentPlatform], 10, 20);
+    } else {
+        ctx.fillStyle = '#fff';
+        ctx.font = '16px monospace';
+        ctx.fillText('4 plataformas colocadas! Exporta el C.', 10, 20);
+    }
+
+    updateInfo();
+}
+
+canvas.addEventListener('click', (e) => {
+    if(currentPlatform >= 4) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) / SCALE);
+    const y = Math.floor((e.clientY - rect.top) / SCALE);
+    platforms[currentPlatform].x = x;
+    platforms[currentPlatform].y = y;
+    currentPlatform++;
+    drawScreen();
+});
+
+canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    if(currentPlatform > 0) {
+        currentPlatform--;
+        platforms[currentPlatform].x = -1;
+        platforms[currentPlatform].y = -1;
+        drawScreen();
+    }
+});
+
+function resetPlatforms() {
+    for(let i = 0; i < 4; i++) { platforms[i].x = -1; platforms[i].y = -1; }
+    currentPlatform = 0;
+    drawScreen();
+}
+
+function updateInfo() {
+    let html = '';
+    for(let i = 0; i < 4; i++) {
+        const cls = 'p' + i;
+        if(platforms[i].x >= 0)
+            html += `<div class="platform ${cls}">P${i+1}: X=${platforms[i].x}, Y=${platforms[i].y}</div>`;
+        else
+            html += `<div class="platform" style="color:#555">P${i+1}: (no colocado)</div>`;
+    }
+    document.getElementById('platforms').innerHTML = html;
+}
+
+function exportC() {
+    let out = '// Platform positions (center X, landing Y in pixels)\n';
+    out += '#define NUM_FROGS 4\n\n';
+    out += 'static const u8 g_LilyX[NUM_FROGS] = { ';
+    out += platforms.map(p => p.x >= 0 ? p.x : 128).join(', ');
+    out += ' };\n';
+    out += 'static const u8 g_LilyY[NUM_FROGS] = { ';
+    out += platforms.map(p => p.y >= 0 ? p.y : 144).join(', ');
+    out += ' };\n';
+    document.getElementById('output').value = out;
+}
+
+// Initial draw
+ctx.fillStyle = '#114';
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+ctx.fillStyle = '#fff';
+ctx.font = '16px monospace';
+ctx.fillText('Cargando tileset y screen_layout...', 10, 30);
+</script>
+</body>
+</html>

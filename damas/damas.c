@@ -15,6 +15,7 @@
 #include "protocol.h"
 #include "network.h"
 #include "log.h"
+#include "lobby_client.h"
 
 //=============================================================================
 // CONSTANTES
@@ -1346,11 +1347,19 @@ void main(void)
     u8 i;
     bool online;
 
-    // Diagnostico red
-    Diag_ShowNetInfo();
-
-    // Conectar
-    online = Net_ConnectToServer();
+    // Check if launched from LOBBY.COM
+    if(LobbyClient_Load()) {
+        g_Conn = (NetConn)(int)g_LobbyData.conn;
+        g_MyPid = g_LobbyData.pid;
+        g_RoomId = g_LobbyData.roomId;
+        g_MyColor = (g_MyPid == 1) ? PIECE_WHITE : PIECE_BLACK;
+        online = TRUE;
+        Net_Init();
+    } else {
+        // Direct launch: full diag + connect
+        Diag_ShowNetInfo();
+        online = Net_ConnectToServer();
+    }
 
     // Screen 4
     VDP_SetMode(VDP_MODE_SCREEN4);
@@ -1366,7 +1375,14 @@ void main(void)
     VDP_LoadTileset();
     Board_Init();
 
-    if(online)
+    if(g_FromLobby)
+    {
+        // From LOBBY.COM: go straight to playing
+        g_GameState = STATE_PLAYING;
+        g_BoardDirty = TRUE;
+        Board_Draw();
+    }
+    else if(online)
     {
         g_GameState = STATE_LOBBY_WAIT;
         Net_RequestRoomList();

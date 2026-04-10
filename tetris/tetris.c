@@ -8,6 +8,7 @@
 #include "system.h"
 #include "dos.h"
 #include "lobby.h"
+#include "lobby_client.h"
 
 // ── Layout ──────────────────────────────────────────────────────────
 #define NP    4
@@ -445,11 +446,22 @@ void main(void)
 
     *((u8*)0xF3DB)=0;
 
-    // Lobby
-    Lobby_Init(&g_LobbyCfg, Game_OnPacket);
-    Lobby_SetTileOffsets(T_FA, T_F0);
-    Lobby_Diag();
-    Lobby_Connect();
+    // Check if launched from LOBBY.COM
+    if(LobbyClient_Load()) {
+        Lobby_Init(&g_LobbyCfg, Game_OnPacket);
+        g_LobbyConn = (NetConn)(int)g_LobbyData.conn;
+        g_LobbyPid = g_LobbyData.pid;
+        g_LobbyRoomId = g_LobbyData.roomId;
+        g_LobbyActive = g_LobbyData.active;
+        g_LobbyOnline = TRUE;
+        g_LobbyState = LOBBY_ST_PLAYING;
+        Net_Init();
+    } else {
+        Lobby_Init(&g_LobbyCfg, Game_OnPacket);
+        Lobby_SetTileOffsets(T_FA, T_F0);
+        Lobby_Diag();
+        Lobby_Connect();
+    }
 
     // Screen 4
     VDP_SetMode(VDP_MODE_SCREEN4);
@@ -461,7 +473,10 @@ void main(void)
 
     g_S=*((u16*)0xFC9E);
 
-    if(g_LobbyOnline) {
+    if(g_FromLobby) {
+        g_MySlot=g_LobbyPid-1;
+        StartGame();
+    } else if(g_LobbyOnline) {
         Lobby_RequestRooms();
         g_LobbyState=LOBBY_ST_LIST_WAIT;
     } else {
