@@ -2,7 +2,7 @@
 name = "msxonline-cli"
 version = "1.0.0"
 edition = "2021"
-description = "MSX Online Server Manager - TUI"
+description = "MSXon Server Manager - TUI"
 
 [dependencies]
 ratatui = "0.29"

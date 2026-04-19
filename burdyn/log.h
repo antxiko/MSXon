@@ -1,5 +1,5 @@
 //=============================================================================
-// log.h — MSX Online · Log a fichero de texto
+// log.h — MSXon · Log a fichero de texto
 //
 // Escribe eventos de red en MSXONLIN.LOG para depurar en hardware real.
 // Usa MSX-DOS 2 handle API (dos.h con DOS_USE_HANDLE).

@@ -1,4 +1,4 @@
-// Frog & Flies — MSX2 Screen 4 — MSXonLINE
+// Frog & Flies — MSX2 Screen 4 — MSXon
 // 4 players online, frogs catching flies
 // GAME_ID=0x69, RELAY mode
 #include "msxgl.h"

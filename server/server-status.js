@@ -1,7 +1,7 @@
 'use strict';
 
 // =============================================================================
-// server-status.js — Monitor del servidor MSX Online
+// server-status.js — Monitor del servidor MSXon
 //
 // Conecta al servidor como cliente, consulta el estado y lo muestra.
 // Uso: node server-status.js [ip] [puerto]
@@ -247,7 +247,7 @@ async function pingServer() {
 function showMenu() {
     console.log('');
     console.log('═══════════════════════════════════════');
-    console.log('  MSX ONLINE — Monitor del servidor');
+    console.log('  MSXon — Monitor del servidor');
     console.log('═══════════════════════════════════════');
     console.log('  1. Ver salas abiertas');
     console.log('  2. Estado del servidor (ping)');

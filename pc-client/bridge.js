@@ -1,7 +1,7 @@
 'use strict';
 
 // =============================================================================
-// bridge.js — TCP↔WebSocket bridge for MSX Online PC Client
+// bridge.js — TCP↔WebSocket bridge for MSXon PC Client
 //
 // Usage:
 //   node bridge.js [server_ip] [server_port]
@@ -74,7 +74,7 @@ wss.on('connection', (ws) => {
 
 // ── Start ───────────────────────────────────────────────────────
 httpServer.listen(BRIDGE_PORT, () => {
-  console.log(`\nMSX Online — PC Client Bridge`);
+  console.log(`\nMSXon — PC Client Bridge`);
   console.log(`━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`);
   console.log(`Game server:  ${SERVER_IP}:${SERVER_PORT}`);
   console.log(`Open browser: http://localhost:${BRIDGE_PORT}\n`);

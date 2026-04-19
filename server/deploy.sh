@@ -56,7 +56,7 @@ echo ""
 echo ">> Creando servicio systemd: $SERVICE_NAME..."
 cat > /etc/systemd/system/${SERVICE_NAME}.service <<EOF
 [Unit]
-Description=MSX Online Game Server
+Description=MSXon Game Server
 After=network.target
 
 [Service]

@@ -1,4 +1,4 @@
-// lobby_client.h — MSXonLINE Lobby Client
+// lobby_client.h — MSXon Lobby Client
 // Read LOBBY.DAT written by LOBBY.COM to skip lobby and go straight to game.
 // Include this in each game instead of lobby.h when using standalone LOBBY.COM.
 #ifndef LOBBY_CLIENT_H

@@ -1,4 +1,4 @@
-// Texas Hold'em Poker — MSX2 Screen 4 — MSXonLINE
+// Texas Hold'em Poker — MSX2 Screen 4 — MSXon
 // Cliente puro: el servidor es el dealer
 // GAME_ID=0x05, RELAY mode
 #include "msxgl.h"

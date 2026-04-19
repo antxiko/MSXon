@@ -1,5 +1,5 @@
 //=============================================================================
-// msxgl_config.h — MSX Online · Configuración de MSXgl
+// msxgl_config.h — MSXon · Configuración de MSXgl
 //
 // MSX2 · Screen 5 · Sprites 16×16 · UNAPI TCP/IP
 //=============================================================================

@@ -1,5 +1,5 @@
 //=============================================================================
-// protocol.h — MSX Online Game Server · Protocolo binario v1.0
+// protocol.h — MSXon Game Server · Protocolo binario v1.0
 // Compartido entre cliente MSX y servidor Node.js
 //
 // Estructura de paquete (6 bytes header + payload):

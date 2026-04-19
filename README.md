@@ -1,4 +1,4 @@
-# MSX Online
+# MSXon
 
 Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre TCP/IP.
 
@@ -73,7 +73,7 @@ Todos los juegos son backward compatible: funcionan sin LOBBY.COM.
 ## Estructura del repo
 
 ```
-MSXonLINE/
+MSXon/
 ├── server/              Servidor Node.js
 │   ├── msx-gameserver.js    Servidor principal (relay + aggregate + handlers)
 │   ├── server-status.js     Monitor interactivo
@@ -121,7 +121,7 @@ ssh root@217.154.107.144 "journalctl -u msx-server -f"
 ssh root@217.154.107.144 "systemctl restart msx-server"
 
 # Desplegar
-cd MSXonLINE && sed -i 's/\r$//' server/update.sh && \
+cd MSXon && sed -i 's/\r$//' server/update.sh && \
 scp server/msx-gameserver.js server/game-handlers/*.js server/update.sh \
 root@217.154.107.144:/tmp/ && ssh root@217.154.107.144 "bash /tmp/update.sh"
 ```

@@ -1,5 +1,5 @@
 //=============================================================================
-// msxonline.c — MSX Online · Cliente mínimo de demostración
+// msxonline.c — MSXon · Cliente mínimo de demostración
 //
 // MSX2 · MSX-DOS · MSXgl · UNAPI TCP/IP
 // Hardware: MSX2 + ObsoNET + InterNestor Lite
@@ -203,7 +203,7 @@ void Game_Init(void)
 
     //-- Log: crear fichero de log antes de todo
     Log_Init();
-    Log_Write("[INIT] MSX Online arrancando");
+    Log_Write("[INIT] MSXon arrancando");
 
     //-- VDP: Screen 5 (256×212, 16 colores, bitmap)
     VDP_SetMode(VDP_MODE_SCREEN5);
@@ -263,10 +263,10 @@ void HUD_Redraw(void)
     VDP_CommandHMMV(0, 0, 256, HUD_HEIGHT, 0x00);
     VDP_CommandWait();
 
-    //-- Línea 1: "MSX ONLINE  [estado]"
+    //-- Línea 1: "MSXon  [estado]"
     Print_SetPosition(0, 0);
     Print_SetColor(11, 0);          // Amarillo
-    Print_DrawText("MSX ONLINE");
+    Print_DrawText("MSXon");
     Print_SetColor(14, 0);          // Gris
     Print_DrawText(" >> ");
     Print_SetColor(15, 0);          // Blanco
@@ -1235,7 +1235,7 @@ void Diag_ShowNetInfo(void)
     u8 ok;
 
     DOS_StringOutput("================================\r\n$");
-    DOS_StringOutput("  MSX ONLINE - NET DIAGNOSTICS\r\n$");
+    DOS_StringOutput("  MSXon - NET DIAGNOSTICS\r\n$");
     DOS_StringOutput("================================\r\n\r\n$");
 
     //-- 1. Buscar UNAPI

@@ -1,7 +1,7 @@
 'use strict';
 
 // =============================================================================
-// msx-gameserver.js — MSX Online Game Server v2.0
+// msx-gameserver.js — MSXon Game Server v2.0
 // Stack: Node.js 20 LTS · TCP raw · Sin dependencias externas
 //
 // Protocolo: header binario 6 bytes + payload 0..255 bytes

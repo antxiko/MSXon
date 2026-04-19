@@ -1,5 +1,5 @@
 [Unit]
-Description=MSX Online Ghost Service
+Description=MSXon Ghost Service
 After=msx-server.service
 Requires=msx-server.service
 

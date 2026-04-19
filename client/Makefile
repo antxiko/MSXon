@@ -1,5 +1,5 @@
 #==============================================================================
-# Makefile — MSX Online Client
+# Makefile — MSXon Client
 # Requiere: SDCC + MSXgl
 #==============================================================================
 
@@ -54,7 +54,7 @@ all: $(TARGET)
 	@echo ""
 	@echo "  ✓ Compilado: $(TARGET)"
 	@echo "  Copia $(TARGET) a un disco MSX-DOS y ejecuta:"
-	@echo "  A> MSXONLINE"
+	@echo "  A> MSXON"
 	@echo ""
 
 # Compilar fuentes → .rel (formato objeto SDCC)

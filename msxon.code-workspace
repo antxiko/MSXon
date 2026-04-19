@@ -1,6 +1,6 @@
 {
   "folders": [
-    { "name": "MSX Online",         "path": "." },
+    { "name": "MSXon",         "path": "." },
     { "name": "Servidor (Node.js)", "path": "server" },
     { "name": "Cliente (MSX C)",    "path": "client" },
     { "name": "Documentación",      "path": "docs" }

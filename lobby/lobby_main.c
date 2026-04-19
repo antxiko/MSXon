@@ -1,4 +1,4 @@
-// lobby.c — MSXonLINE Universal Lobby (standalone LOBBY.COM)
+// lobby.c — MSXon Universal Lobby (standalone LOBBY.COM)
 // Screen 0 text mode — game selector, connect, rooms, waiting, launch game
 #include "msxgl.h"
 #include "vdp.h"
@@ -119,7 +119,7 @@ static bool RunDiag(void) {
     u8 ok;
 
     PrintLn("================================");
-    Print("   MSXonLINE - ");
+    Print("   MSXon - ");
     PrintLn(g_CurGame->name);
     PrintLn("================================");
     PrintLn("");
@@ -391,7 +391,7 @@ static void DrawMenu(void) {
     u8 i;
     ClearScreen();
     PrintLn("================================");
-    PrintLn("     MSXonLINE v2.0");
+    PrintLn("     MSXon v2.0");
     PrintLn("     Selector de Juegos");
     PrintLn("================================");
     PrintLn("");

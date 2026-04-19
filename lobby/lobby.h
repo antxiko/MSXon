@@ -1,5 +1,5 @@
-// lobby.h — MSXonLINE Universal Lobby Module
-// Shared lobby code for all MSXonLINE games
+// lobby.h — MSXon Universal Lobby Module
+// Shared lobby code for all MSXon games
 #pragma once
 
 #include "msxgl.h"

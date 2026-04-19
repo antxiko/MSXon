@@ -1,4 +1,4 @@
-# Texas Hold'em Poker — MSX Online
+# Texas Hold'em Poker — MSXon
 
 Poker Texas Hold'em para MSX2 con hasta 6 jugadores. GAME_ID = 0x05.
 

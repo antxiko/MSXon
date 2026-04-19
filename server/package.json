@@ -1,7 +1,7 @@
 {
   "name": "msx-gameserver",
   "version": "1.0.0",
-  "description": "MSX Online Game Server — relay TCP para partidas MSX con UNAPI",
+  "description": "MSXon Game Server — relay TCP para partidas MSX con UNAPI",
   "main": "msx-gameserver.js",
   "scripts": {
     "start": "node msx-gameserver.js",

@@ -1,5 +1,5 @@
 [Unit]
-Description=MSX Online Game Server
+Description=MSXon Game Server
 After=network.target
 
 [Service]

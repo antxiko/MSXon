@@ -1,4 +1,4 @@
-// lobby.c — MSXonLINE Universal Lobby Module
+// lobby.c — MSXon Universal Lobby Module
 // Extracted from texas.c (most updated pattern)
 #include "lobby.h"
 #include "dos.h"

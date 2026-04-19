@@ -189,7 +189,7 @@ fn ui(f: &mut Frame, app: &App) {
 
     let titles = vec![" Salas [1] ", " Logs [2] ", " Ayuda [3] "];
     let tabs = Tabs::new(titles)
-        .block(Block::default().borders(Borders::ALL).title(" ◆ MSX ONLINE MANAGER ◆ "))
+        .block(Block::default().borders(Borders::ALL).title(" ◆ MSXon MANAGER ◆ "))
         .select(app.tab)
         .style(Style::default().fg(Color::White))
         .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD));
@@ -282,9 +282,9 @@ fn draw_logs(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_help(f: &mut Frame, area: Rect) {
     let help = vec![
-        Line::from(Span::styled("MSX ONLINE MANAGER v1.0", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+        Line::from(Span::styled("MSXon MANAGER v1.0", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
         Line::from(""),
-        Line::from("Herramienta de gestion del servidor MSX Online."),
+        Line::from("Herramienta de gestion del servidor MSXon."),
         Line::from(""),
         Line::from(Span::styled("Servidor", Style::default().fg(Color::Cyan))),
         Line::from(format!("  {}:{}", SERVER_IP, SERVER_PORT)),
@@ -312,7 +312,7 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout()))?;
 
     let mut app = App::new();
-    app.log("MSX Online Manager arrancado".into());
+    app.log("MSXon Manager arrancado".into());
 
     loop {
         terminal.draw(|f| ui(f, &app))?;

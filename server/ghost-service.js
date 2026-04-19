@@ -1,7 +1,7 @@
 'use strict';
 
 // =============================================================================
-// ghost-service.js — MSX Online Ghost Service
+// ghost-service.js — MSXon Ghost Service
 //
 // Servicio persistente que mantiene ghosts activos en el servidor.
 // Corre en el VPS junto a msx-gameserver.js como servicio systemd.
@@ -1152,7 +1152,7 @@ const NUM_BURDYN = parseInt(process.argv[2] || '3', 10);
 const NUM_TETRIS = parseInt(process.argv[3] || '3', 10);
 const NUM_PARCHIS = parseInt(process.argv[4] || '3', 10);
 
-console.log('MSX Online Ghost Service v1.3');
+console.log('MSXon Ghost Service v1.3');
 console.log(`Iniciando: 1 damas + ${NUM_BURDYN} burdyn + ${NUM_TETRIS} tetris + ${NUM_PARCHIS} parchis + 1 poker\n`);
 startDamasGhost();
 

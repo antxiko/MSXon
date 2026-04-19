@@ -1,4 +1,4 @@
-# Tetris 4P — MSX Online
+# Tetris 4P — MSXon
 
 Tetris competitivo a 4 jugadores para MSX2 online. GAME_ID = 0x06.
 

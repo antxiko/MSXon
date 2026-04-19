@@ -1,6 +1,6 @@
-# Lobby Universal — MSXonLINE
+# Lobby Universal — MSXon
 
-Modulo compartido de lobby/red para todos los juegos de MSXonLINE.
+Modulo compartido de lobby/red para todos los juegos de MSXon.
 
 ## Que incluye
 

@@ -1,4 +1,4 @@
-// lobby_client.c — MSXonLINE Lobby Client
+// lobby_client.c — MSXon Lobby Client
 #include "lobby_client.h"
 
 LobbyData g_LobbyData;

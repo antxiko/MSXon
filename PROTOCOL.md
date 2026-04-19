@@ -1,6 +1,6 @@
-# MSX Online — Protocol Specification v2.0
+# MSXon — Protocol Specification v2.0
 
-Guide for developers who want to write their own client for the MSX Online network.
+Guide for developers who want to write their own client for the MSXon network.
 
 ---
 
@@ -256,4 +256,4 @@ sock.on('data', (chunk) => {
 
 ---
 
-_MSX Online Game Server v2.0 — Antxiko_
+_MSXon Game Server v2.0 — Antxiko_

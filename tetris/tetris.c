@@ -1,4 +1,4 @@
-// Tetris 4P — MSX2 Screen 4 — MSXonLINE
+// Tetris 4P — MSX2 Screen 4 — MSXon
 // 4 players, 8 cols each, 20 rows, shadow buffer
 // GAME_ID=0x06, RELAY mode
 #include "msxgl.h"

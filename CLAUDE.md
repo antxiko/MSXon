@@ -1,4 +1,4 @@
-# MSX ONLINE — Contexto del proyecto para Claude
+# MSXon — Contexto del proyecto para Claude
 # Ultima actualizacion: 2026-04-10
 # Estado: 8 juegos + LOBBY.COM — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_029), Parchis (PAR_011), Texas (TEX_030), Tetris (TET_024), Among (AMG_001), Frog & Flies (FRG_012)
 
@@ -33,7 +33,7 @@ Codigo compartido en `shared/`: network.h, protocol.h, log.h, lobby_client.h/c
 ## ESTRUCTURA DE ARCHIVOS
 
 ```
-MSXonLINE/                           <-- Repo GitHub (antxiko/MSXonLINE)
+MSXon/                           <-- Repo GitHub (antxiko/MSXon)
 |
 |-- server/
 |   |-- msx-gameserver.js            <-- Servidor TCP (relay + game handlers)
@@ -123,7 +123,7 @@ ssh root@217.154.107.144 "journalctl -u msx-server -f"
 # Reiniciar
 ssh root@217.154.107.144 "systemctl restart msx-server"
 # Desplegar
-cd ~/Documents/MSXonLIVE/MSXonLINE && sed -i 's/\r$//' server/update.sh && scp server/msx-gameserver.js server/update.sh root@217.154.107.144:/tmp/ && ssh root@217.154.107.144 "bash /tmp/update.sh"
+cd ~/Documents/MSXonLIVE/MSXon && sed -i 's/\r$//' server/update.sh && scp server/msx-gameserver.js server/update.sh root@217.154.107.144:/tmp/ && ssh root@217.154.107.144 "bash /tmp/update.sh"
 ```
 
 ---
@@ -335,4 +335,4 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ---
 
-_Proyecto de Antxiko · MSX Online v2.0_
+_Proyecto de Antxiko · MSXon v2.0_
