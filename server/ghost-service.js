@@ -900,13 +900,260 @@ function startPokerGhost() {
     }, 500);
 }
 
+// ── Parchis Ghost ─────────────────────────────────────────────
+
+let parchisRoomId = 0;
+const GAME_ID_PARCHIS = 0x04;
+
+// Salida en el recorrido por jugador (0-indexed: P1, P2, P3, P4)
+const PARCHIS_EXIT = [5, 22, 39, 56];
+// Casilla antes de entrar al pasillo por jugador
+const PARCHIS_ENTER_PASS = [68, 17, 34, 51];
+const PARCHIS_PATH_LENGTH = 68;
+const PARCHIS_PASSAGE_LENGTH = 8;
+
+const PARCHIS_STATE_HOME = 0;
+const PARCHIS_STATE_BOARD = 1;
+const PARCHIS_STATE_PASSAGE = 2;
+const PARCHIS_STATE_GOAL = 3;
+
+function startParchisGhost(ghostNum) {
+    const sock = new net.Socket();
+    let roomId = 0, pid = 0;
+    let mySlot = 0;
+    let turn = 0;
+    let gameStarted = false;
+    let recvBuf = Buffer.alloc(0);
+    let interval = null;
+    let pingCounter = 0;
+    let activePlayers = 0;
+    // Estado de mis 4 fichas
+    const pieces = [
+        { state: PARCHIS_STATE_HOME, pos: 0 },
+        { state: PARCHIS_STATE_HOME, pos: 0 },
+        { state: PARCHIS_STATE_HOME, pos: 0 },
+        { state: PARCHIS_STATE_HOME, pos: 0 },
+    ];
+    // Pending move (after dice)
+    let pendingMove = null;
+
+    function log(msg) {
+        const d = new Date();
+        const ts = d.toTimeString().substring(0, 8);
+        console.log(`[${ts}] [PARCHIS#${ghostNum}] ${msg}`);
+    }
+
+    // Decide qué ficha mover con el dado. Devuelve {pieceIdx, newPos, newState} o null.
+    function decideMove(dice) {
+        // 1. Si saco 5 y tengo ficha en casa: sacar
+        if (dice === 5) {
+            for (let i = 0; i < 4; i++) {
+                if (pieces[i].state === PARCHIS_STATE_HOME) {
+                    return {
+                        pieceIdx: i,
+                        newPos: PARCHIS_EXIT[mySlot] - 1, // 0-indexed
+                        newState: PARCHIS_STATE_BOARD,
+                    };
+                }
+            }
+        }
+        // 2. Buscar ficha en tablero que pueda mover
+        for (let i = 0; i < 4; i++) {
+            if (pieces[i].state === PARCHIS_STATE_BOARD) {
+                let newPos = pieces[i].pos + dice;
+                const enterPass = PARCHIS_ENTER_PASS[mySlot] - 1;
+                // Normalizar recorrido circular (68 casillas)
+                const distToEnter = (enterPass - pieces[i].pos + PARCHIS_PATH_LENGTH) % PARCHIS_PATH_LENGTH;
+                if (dice > distToEnter) {
+                    // Entra al pasillo
+                    const passPos = dice - distToEnter - 1;
+                    if (passPos < PARCHIS_PASSAGE_LENGTH) {
+                        if (passPos === PARCHIS_PASSAGE_LENGTH - 1) {
+                            return { pieceIdx: i, newPos: passPos, newState: PARCHIS_STATE_GOAL };
+                        }
+                        return { pieceIdx: i, newPos: passPos, newState: PARCHIS_STATE_PASSAGE };
+                    }
+                    // Se pasaria, no puede mover esta ficha
+                    continue;
+                }
+                newPos = newPos % PARCHIS_PATH_LENGTH;
+                return { pieceIdx: i, newPos, newState: PARCHIS_STATE_BOARD };
+            }
+        }
+        // 3. Ficha en pasillo
+        for (let i = 0; i < 4; i++) {
+            if (pieces[i].state === PARCHIS_STATE_PASSAGE) {
+                const newPos = pieces[i].pos + dice;
+                if (newPos < PARCHIS_PASSAGE_LENGTH) {
+                    if (newPos === PARCHIS_PASSAGE_LENGTH - 1) {
+                        return { pieceIdx: i, newPos, newState: PARCHIS_STATE_GOAL };
+                    }
+                    return { pieceIdx: i, newPos, newState: PARCHIS_STATE_PASSAGE };
+                }
+            }
+        }
+        return null; // No puedo mover
+    }
+
+    function takeTurn() {
+        if (!gameStarted || sock.destroyed) return;
+        if (turn !== mySlot) return;
+
+        // Tirar dado
+        const dice = 1 + Math.floor(Math.random() * 6);
+        const endTurnDice = 0;
+        const pl = Buffer.from([0, dice, 0, 0, endTurnDice, 0, 0, 0]);
+        sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, pl));
+
+        setTimeout(() => {
+            if (sock.destroyed) return;
+            const mv = decideMove(dice);
+            const endTurn = (dice === 6) ? 0 : 1;
+            if (mv) {
+                // Aplicar en mi estado local
+                pieces[mv.pieceIdx].state = mv.newState;
+                pieces[mv.pieceIdx].pos = mv.newPos;
+                const movePl = Buffer.from([1, dice, mv.pieceIdx, mv.newPos, endTurn, mv.newState, 0, 0]);
+                sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, movePl));
+                log(`Dado=${dice} pieza=${mv.pieceIdx} pos=${mv.newPos} estado=${mv.newState} endTurn=${endTurn}`);
+            } else {
+                // No puede mover: enviar move nulo con endTurn=1 (si no saco 6)
+                const piece0 = pieces[0];
+                const movePl = Buffer.from([1, dice, 0, piece0.pos, endTurn, piece0.state, 0, 0]);
+                sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, movePl));
+                log(`Dado=${dice} sin movimientos`);
+            }
+            // Avanzar turno local si endTurn=1
+            if (endTurn) {
+                advanceTurn();
+            } else {
+                // Jugar otra vez (saque 6)
+                setTimeout(() => takeTurn(), 2000);
+            }
+        }, 1500 + Math.floor(Math.random() * 1500));
+    }
+
+    function advanceTurn() {
+        let next = (turn + 1) % 4;
+        let tries = 0;
+        while (!(activePlayers & (1 << next)) && tries < 4) {
+            next = (next + 1) % 4;
+            tries++;
+        }
+        turn = next;
+        if (turn === mySlot) {
+            setTimeout(() => takeTurn(), 1500);
+        }
+    }
+
+    sock.connect(SERVER_PORT, SERVER_IP, () => {
+        log('Conectado');
+        sock.write(buildPacket(CMD.AUTH, 0, 0, AUTH_TOKEN));
+    });
+
+    sock.on('data', (chunk) => {
+        recvBuf = Buffer.concat([recvBuf, chunk]);
+        while (recvBuf.length >= 6) {
+            const magicPos = recvBuf.indexOf(Buffer.from([0x46, 0x4D]));
+            if (magicPos < 0) { recvBuf = Buffer.alloc(0); break; }
+            if (magicPos > 0) { recvBuf = recvBuf.subarray(magicPos); continue; }
+            const payloadLen = recvBuf[5];
+            if (recvBuf.length < 6 + payloadLen) break;
+            const cmd = recvBuf[2];
+            const payload = Buffer.from(recvBuf.subarray(6, 6 + payloadLen));
+            recvBuf = recvBuf.subarray(6 + payloadLen);
+
+            if (cmd === CMD.AUTH_OK) {
+                log('Auth OK');
+                if (ghostNum === 0) {
+                    // P1 crea sala
+                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0,
+                        Buffer.from([GAME_ID_PARCHIS, 4, 0x01])));
+                } else if (parchisRoomId > 0) {
+                    sock.write(buildPacket(CMD.ROOM_JOIN, 0, 0,
+                        Buffer.from([parchisRoomId])));
+                }
+            }
+            else if (cmd === 0x23) { // ROOM_INFO
+                roomId = payload[0];
+                pid = payload[3];
+                mySlot = pid - 1;
+                if (ghostNum === 0) parchisRoomId = roomId;
+                // Set active players from payload[2]
+                const np = payload[2];
+                activePlayers = 0;
+                for (let j = 0; j < np; j++) activePlayers |= (1 << j);
+                log(`Sala ${roomId} PID=${pid} slot=${mySlot} activos=${np}`);
+            }
+            else if (cmd === 0x30) { // PLAYER_JOINED
+                const joinedPid = payload[0];
+                activePlayers |= (1 << (joinedPid - 1));
+                log(`Player joined PID=${joinedPid}`);
+                // P1 decides game start when room is full or has enough humans
+                if (ghostNum === 0 && pid === 1 && joinedPid >= 2 && !gameStarted) {
+                    log('Empezando en 3s...');
+                    setTimeout(() => {
+                        if (!sock.destroyed) {
+                            sock.write(buildPacket(0x32, roomId, pid));
+                        }
+                    }, 3000);
+                }
+            }
+            else if (cmd === 0x31) { // PLAYER_LEFT
+                const leftPid = payload[0];
+                activePlayers &= ~(1 << (leftPid - 1));
+                log(`Player left PID=${leftPid}`);
+            }
+            else if (cmd === 0x32) { // GAME_START
+                gameStarted = true;
+                turn = 0;
+                // Reset pieces
+                for (let i = 0; i < 4; i++) {
+                    pieces[i].state = PARCHIS_STATE_HOME;
+                    pieces[i].pos = 0;
+                }
+                log('Partida iniciada');
+                if (turn === mySlot) {
+                    setTimeout(() => takeTurn(), 2000);
+                }
+            }
+            else if (cmd === CMD.STATE_UPDATE && payloadLen >= 6) {
+                const action = payload[0];
+                const endTurn = payload[4];
+                if (action === 1 && endTurn) {
+                    advanceTurn();
+                }
+            }
+        }
+    });
+
+    sock.on('error', (err) => {
+        if (err.code !== 'ECONNRESET') log(`Error: ${err.message}`);
+    });
+
+    sock.on('close', () => {
+        log('Desconectado. Reconectando en 5s...');
+        if (interval) clearInterval(interval);
+        setTimeout(() => startParchisGhost(ghostNum), 5000);
+    });
+
+    interval = setInterval(() => {
+        pingCounter++;
+        if (pingCounter >= 30) {
+            pingCounter = 0;
+            if (!sock.destroyed && roomId) sock.write(buildPacket(CMD.PING, roomId, pid));
+        }
+    }, 500);
+}
+
 // ── Arranque ──────────────────────────────────────────────────
 
 const NUM_BURDYN = parseInt(process.argv[2] || '3', 10);
 const NUM_TETRIS = parseInt(process.argv[3] || '3', 10);
+const NUM_PARCHIS = parseInt(process.argv[4] || '3', 10);
 
-console.log('MSX Online Ghost Service v1.2');
-console.log(`Iniciando: 1 ghost damas + ${NUM_BURDYN} ghost(s) burdyn + ${NUM_TETRIS} ghost(s) tetris + 1 ghost poker\n`);
+console.log('MSX Online Ghost Service v1.3');
+console.log(`Iniciando: 1 damas + ${NUM_BURDYN} burdyn + ${NUM_TETRIS} tetris + ${NUM_PARCHIS} parchis + 1 poker\n`);
 startDamasGhost();
 
 // Burdyn ghosts
@@ -941,3 +1188,18 @@ setTimeout(() => {
 setTimeout(() => {
     startPokerGhost();
 }, 12000);
+
+// Parchis ghosts
+setTimeout(() => {
+    startParchisGhost(0);
+    for (let i = 1; i < NUM_PARCHIS; i++) {
+        setTimeout(() => {
+            if (parchisRoomId > 0) {
+                startParchisGhost(i);
+            } else {
+                console.log(`[PARCHIS#${i}] Esperando sala... reintentando en 3s`);
+                setTimeout(() => startParchisGhost(i), 3000);
+            }
+        }, 3000 + i * 1500);
+    }
+}, 15000);
