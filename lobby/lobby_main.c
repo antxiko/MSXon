@@ -1,4 +1,4 @@
-// lobby.c — MSXon Universal Lobby (standalone LOBBY.COM)
+// lobby.c — MSXonLINE Universal Lobby (standalone LOBBY.COM)
 // Screen 0 text mode — game selector, connect, rooms, waiting, launch game
 #include "msxgl.h"
 #include "vdp.h"
@@ -23,7 +23,7 @@ typedef struct {
     u8 protoVersion;
 } GameDef;
 
-#define NUM_GAMES 8
+#define NUM_GAMES 9
 
 static const GameDef g_Games[NUM_GAMES] = {
     {"BALL DEMO",    "MSXONLIN", 0x01, 4, 0x01},
@@ -33,6 +33,7 @@ static const GameDef g_Games[NUM_GAMES] = {
     {"TEXAS HOLDEM", "TEXAS",    0x05, 6, 0x01},
     {"TETRIS 4P",    "TETRIS",   0x06, 4, 0x01},
     {"AMONG MSX",    "AMONG",    0x07, 8, 0x01},
+    {"BOMBERMAN",    "BOMBER",   0x08, 4, 0x01},
     {"FROG FLIES",   "FROGFLIE", 0x69, 4, 0x01},
 };
 
@@ -119,7 +120,7 @@ static bool RunDiag(void) {
     u8 ok;
 
     PrintLn("================================");
-    Print("   MSXon - ");
+    Print("   MSXonLINE - ");
     PrintLn(g_CurGame->name);
     PrintLn("================================");
     PrintLn("");
@@ -391,7 +392,7 @@ static void DrawMenu(void) {
     u8 i;
     ClearScreen();
     PrintLn("================================");
-    PrintLn("     MSXon v2.0");
+    PrintLn("     MSXonLINE v2.0");
     PrintLn("     Selector de Juegos");
     PrintLn("================================");
     PrintLn("");
