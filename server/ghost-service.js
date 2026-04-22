@@ -1109,8 +1109,8 @@ function startParchisGhost(ghostNum) {
                 const joinedPid = payload[0];
                 activePlayers |= (1 << (joinedPid - 1));
                 log(`Player joined PID=${joinedPid}`);
-                // P1 decides game start when room is full or has enough humans
-                if (ghostNum === 0 && pid === 1 && joinedPid >= 2 && !gameStarted) {
+                // Any ghost that is P1 (host) triggers game start when someone joins
+                if (pid === 1 && joinedPid >= 2 && !gameStarted) {
                     log('Empezando en 3s...');
                     setTimeout(() => {
                         if (!sock.destroyed && !gameStarted) {
@@ -1132,6 +1132,13 @@ function startParchisGhost(ghostNum) {
                 const leftPid = payload[0];
                 activePlayers &= ~(1 << (leftPid - 1));
                 log(`Player left PID=${leftPid}`);
+            }
+            else if (cmd === 0x24 || cmd === 0x25) {
+                // ROOM_FULL or ROOM_NOT_FOUND — stale parchisRoomId, create own room
+                log(`Sala invalida (cmd=0x${cmd.toString(16)}), creando sala propia`);
+                parchisRoomId = 0;
+                sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0,
+                    Buffer.from([GAME_ID_PARCHIS, 4, 0x01])));
             }
             else if (cmd === 0x32) { // GAME_START
                 gameStarted = true;
@@ -1162,6 +1169,11 @@ function startParchisGhost(ghostNum) {
 
     sock.on('close', () => {
         log('Desconectado. Reconectando en 5s...');
+        // If I was the host, the room is likely gone — reset shared ID so others fallback
+        if (pid === 1 && roomId === parchisRoomId) {
+            parchisRoomId = 0;
+            log('Era host, parchisRoomId reseteado a 0');
+        }
         if (interval) clearInterval(interval);
         setTimeout(() => startParchisGhost(ghostNum), 5000);
     });
