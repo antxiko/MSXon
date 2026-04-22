@@ -2,6 +2,7 @@
 Description=MSXon Ghost Service
 After=msx-server.service
 Requires=msx-server.service
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple

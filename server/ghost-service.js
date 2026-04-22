@@ -15,6 +15,14 @@
 
 const net = require('net');
 
+// Global error handlers — prevent a single ghost crash from killing the whole service
+process.on('uncaughtException', (err) => {
+    console.error('[FATAL] uncaughtException:', err && err.stack || err);
+});
+process.on('unhandledRejection', (err) => {
+    console.error('[FATAL] unhandledRejection:', err && err.stack || err);
+});
+
 const SERVER_IP   = '127.0.0.1'; // localhost — corre en el mismo VPS
 const SERVER_PORT = 9876;
 const AUTH_TOKEN  = Buffer.from(
@@ -687,7 +695,13 @@ function startTetrisGhost(ghostNum) {
                     setTimeout(() => {
                         if (!sock.destroyed && !gameStarted) {
                             sock.write(buildPacket(0x32, roomId, pid));
+                            // Align local state with what cmd===0x32 handler does
                             gameStarted = true;
+                            aiComputed = false;
+                            for (let r = 0; r < TET_BH; r++)
+                                for (let c = 0; c < TET_BW; c++) board[r][c] = 0;
+                            dead = false;
+                            spawn();
                             log('GAME_START enviado');
                         }
                     }, 3000);
@@ -1072,13 +1086,19 @@ function startParchisGhost(ghostNum) {
                 } else if (parchisRoomId > 0) {
                     sock.write(buildPacket(CMD.ROOM_JOIN, 0, 0,
                         Buffer.from([parchisRoomId])));
+                } else {
+                    // Fallback: no hay sala, crear una propia
+                    log('parchisRoomId=0, creando sala propia');
+                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0,
+                        Buffer.from([GAME_ID_PARCHIS, 4, 0x01])));
                 }
             }
             else if (cmd === 0x23) { // ROOM_INFO
                 roomId = payload[0];
                 pid = payload[3];
                 mySlot = pid - 1;
-                if (ghostNum === 0) parchisRoomId = roomId;
+                // Update parchisRoomId if we're the host (ghost 0 or fallback host)
+                if (pid === 1) parchisRoomId = roomId;
                 // Set active players from payload[2]
                 const np = payload[2];
                 activePlayers = 0;
@@ -1093,8 +1113,17 @@ function startParchisGhost(ghostNum) {
                 if (ghostNum === 0 && pid === 1 && joinedPid >= 2 && !gameStarted) {
                     log('Empezando en 3s...');
                     setTimeout(() => {
-                        if (!sock.destroyed) {
+                        if (!sock.destroyed && !gameStarted) {
                             sock.write(buildPacket(0x32, roomId, pid));
+                            // Server doesn't echo GAME_START back — set local state manually
+                            gameStarted = true;
+                            turn = 0;
+                            for (let i = 0; i < 4; i++) {
+                                pieces[i].state = PARCHIS_STATE_HOME;
+                                pieces[i].pos = 0;
+                            }
+                            log('GAME_START enviado');
+                            if (turn === mySlot) setTimeout(() => takeTurn(), 2000);
                         }
                     }, 3000);
                 }
