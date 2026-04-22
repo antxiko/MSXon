@@ -355,13 +355,13 @@ function startBurdynGhost(ghostNum) {
             if (cmd === CMD.AUTH_OK) {
                 log(`Auth OK (idx=${idx}, burdynRoomId=${burdynRoomId})`);
                 if (idx === 0) {
-                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x01])));
+                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x02])));
                 } else if (burdynRoomId > 0) {
                     log(`JOIN sala 0x${burdynRoomId.toString(16).padStart(2, '0')}`);
                     sock.write(buildPacket(0x21, 0, 0, Buffer.from([burdynRoomId])));
                 } else {
                     log('ERROR: burdynRoomId=0, creando sala propia');
-                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x01])));
+                    sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0, Buffer.from([0x03, 14, 0x02])));
                 }
             }
             else if (cmd === CMD.ROOM_INFO) {
