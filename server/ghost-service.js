@@ -418,7 +418,7 @@ function startBurdynGhost(ghostNum) {
         // Log periodico para diagnostico
         moveCounter++;
         if (moveCounter % 75 === 0) log(`pos=(${x},${y}) pid=${pid} room=${roomId}`);
-    }, 133); // ~7-8 moves/sec (matches MSX MOVE_JIFFIES=8)
+    }, 300); // ~3 moves/sec (reducido para no saturar ESP-01 del MSX)
 }
 
 // =============================================================================
@@ -766,7 +766,7 @@ function startTetrisGhost(ghostNum) {
         if (!gameStarted || dead) return;
 
         aiTick();
-    }, 500); // 2 ticks per second
+    }, 800); // 1.25 ticks/sec (reducido para aliviar ESP-01)
 }
 
 // =============================================================================
@@ -1194,9 +1194,9 @@ function startParchisGhost(ghostNum) {
 
 // ── Arranque ──────────────────────────────────────────────────
 
-const NUM_BURDYN = parseInt(process.argv[2] || '3', 10);
-const NUM_TETRIS = parseInt(process.argv[3] || '3', 10);
-const NUM_PARCHIS = parseInt(process.argv[4] || '3', 10);
+const NUM_BURDYN = parseInt(process.argv[2] || '2', 10);
+const NUM_TETRIS = parseInt(process.argv[3] || '2', 10);
+const NUM_PARCHIS = parseInt(process.argv[4] || '2', 10);
 
 console.log('MSXon Ghost Service v1.3');
 console.log(`Iniciando: 1 damas + ${NUM_BURDYN} burdyn + ${NUM_TETRIS} tetris + ${NUM_PARCHIS} parchis + 1 poker\n`);
