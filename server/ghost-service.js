@@ -396,6 +396,7 @@ function startBurdynGhost(ghostNum) {
     });
 
     // Movimiento: rebote diagonal por el mapa 64x64
+    let moveCounter = 0;
     interval = setInterval(() => {
         pingCounter++;
         if (pingCounter >= 38) { // ~5 seconds at 133ms
@@ -413,6 +414,10 @@ function startBurdynGhost(ghostNum) {
 
         const pl = Buffer.from([x, y, 0, 100, 0, 0, 1, 0]);
         if (!sock.destroyed) sock.write(buildPacket(CMD.STATE_UPDATE, roomId, pid, pl));
+
+        // Log periodico para diagnostico
+        moveCounter++;
+        if (moveCounter % 75 === 0) log(`pos=(${x},${y}) pid=${pid} room=${roomId}`);
     }, 133); // ~7-8 moves/sec (matches MSX MOVE_JIFFIES=8)
 }
 
