@@ -1082,6 +1082,8 @@ function startParchisGhost(ghostNum) {
             const payload = Buffer.from(recvBuf.subarray(6, 6 + payloadLen));
             recvBuf = recvBuf.subarray(6 + payloadLen);
 
+            log(`RX cmd=0x${cmd.toString(16)} len=${payloadLen}`);
+
             if (cmd === CMD.AUTH_OK) {
                 log(`Auth OK (ghostNum=${ghostNum}, parchisRoomId=${parchisRoomId})`);
                 if (ghostNum === 0) {
