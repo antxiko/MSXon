@@ -695,8 +695,8 @@ function startTetrisGhost(ghostNum) {
                 const joinedPid = payload[0];
                 log(`Player joined PID ${joinedPid}`);
                 // Ghost #0: when 4th player joins (sala completa), wait 3s and start
-                if (ghostNum === 0 && joinedPid === 4 && !gameStarted) {
-                    log('Sala completa! Empezando en 3s...');
+                if (ghostNum === 0 && joinedPid >= 2 && !gameStarted) {
+                    log(`${joinedPid} jugadores, empezando en 3s...`);
                     setTimeout(() => {
                         if (!sock.destroyed && !gameStarted) {
                             sock.write(buildPacket(0x32, roomId, pid));
