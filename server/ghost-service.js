@@ -1083,16 +1083,16 @@ function startParchisGhost(ghostNum) {
             recvBuf = recvBuf.subarray(6 + payloadLen);
 
             if (cmd === CMD.AUTH_OK) {
-                log('Auth OK');
+                log(`Auth OK (ghostNum=${ghostNum}, parchisRoomId=${parchisRoomId})`);
                 if (ghostNum === 0) {
-                    // P1 crea sala
+                    log('Creando sala (ghost 0)');
                     sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0,
                         Buffer.from([GAME_ID_PARCHIS, 4, 0x01])));
                 } else if (parchisRoomId > 0) {
+                    log(`JOIN sala ${parchisRoomId}`);
                     sock.write(buildPacket(CMD.ROOM_JOIN, 0, 0,
                         Buffer.from([parchisRoomId])));
                 } else {
-                    // Fallback: no hay sala, crear una propia
                     log('parchisRoomId=0, creando sala propia');
                     sock.write(buildPacket(CMD.ROOM_CREATE, 0, 0,
                         Buffer.from([GAME_ID_PARCHIS, 4, 0x01])));
