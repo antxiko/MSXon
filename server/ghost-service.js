@@ -695,8 +695,8 @@ function startTetrisGhost(ghostNum) {
                 const joinedPid = payload[0];
                 log(`Player joined PID ${joinedPid}`);
                 // Ghost #0: when 4th player joins (sala completa), wait 3s and start
-                if (ghostNum === 0 && joinedPid >= 2 && !gameStarted) {
-                    log(`${joinedPid} jugadores, empezando en 3s...`);
+                if (ghostNum === 0 && joinedPid === 4 && !gameStarted) {
+                    log('Sala completa! Empezando en 3s...');
                     setTimeout(() => {
                         if (!sock.destroyed && !gameStarted) {
                             sock.write(buildPacket(0x32, roomId, pid));
@@ -1116,9 +1116,9 @@ function startParchisGhost(ghostNum) {
                 const joinedPid = payload[0];
                 activePlayers |= (1 << (joinedPid - 1));
                 log(`Player joined PID=${joinedPid}`);
-                // Any ghost that is P1 (host) triggers game start when someone joins
-                if (pid === 1 && joinedPid >= 2 && !gameStarted) {
-                    log('Empezando en 3s...');
+                // Host triggers GAME_START when room is full (4 players)
+                if (pid === 1 && joinedPid === 4 && !gameStarted) {
+                    log('Sala completa (4/4), empezando en 3s...');
                     setTimeout(() => {
                         if (!sock.destroyed && !gameStarted) {
                             sock.write(buildPacket(0x32, roomId, pid));
@@ -1197,8 +1197,8 @@ function startParchisGhost(ghostNum) {
 // ── Arranque ──────────────────────────────────────────────────
 
 const NUM_BURDYN = parseInt(process.argv[2] || '2', 10);
-const NUM_TETRIS = parseInt(process.argv[3] || '2', 10);
-const NUM_PARCHIS = parseInt(process.argv[4] || '2', 10);
+const NUM_TETRIS = parseInt(process.argv[3] || '3', 10);
+const NUM_PARCHIS = parseInt(process.argv[4] || '3', 10);
 
 console.log('MSXon Ghost Service v1.3');
 console.log(`Iniciando: 1 damas + ${NUM_BURDYN} burdyn + ${NUM_TETRIS} tetris + ${NUM_PARCHIS} parchis + 1 poker\n`);

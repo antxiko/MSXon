@@ -333,10 +333,6 @@ function handlePacket(socket, state, { cmd, payload }) {
         CMD.ROOM_INFO, roomId, pid,
         Buffer.from([roomId, room.gameId, room.players.size, pid])
       ));
-      // Si la partida ya empezó, notificar al recién llegado
-      if (room.gameStarted) {
-        socket.write(buildPacket(CMD.GAME_START, roomId, 0));
-      }
       if (room.handler && room.handler.onPlayerJoined)
         room.handler.onPlayerJoined(room, pid);
       break;
