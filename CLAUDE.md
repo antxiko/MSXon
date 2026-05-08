@@ -1,5 +1,5 @@
 # MSXon — Contexto del proyecto para Claude
-# Ultima actualizacion: 2026-04-10
+# Ultima actualizacion: 2026-05-08
 # Estado: 8 juegos + LOBBY.COM — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_029), Parchis (PAR_011), Texas (TEX_030), Tetris (TET_024), Among (AMG_001), Frog & Flies (FRG_012)
 
 ---
@@ -38,7 +38,14 @@ MSXon/                           <-- Repo GitHub (antxiko/MSXon)
 |-- server/
 |   |-- msx-gameserver.js            <-- Servidor TCP (relay + game handlers)
 |   |-- server-status.js             <-- Monitor interactivo + ghost player
-|   |-- ghost-service.js             <-- Ghosts persistentes en VPS
+|   |-- ghost-service.js             <-- Entry point modular ghosts (v2.0)
+|   |-- ghost-base.js                <-- Clase base (plumbing comun, backoff, cleanup)
+|   |-- ghost-room-registry.js       <-- Singleton coordinacion roomId compartido
+|   |-- ghost-damas.js               <-- Ghost Damas
+|   |-- ghost-burdyn.js              <-- Ghost Burdyn (multi-instancia)
+|   |-- ghost-tetris.js              <-- Ghost Tetris (multi-instancia)
+|   |-- ghost-poker.js               <-- Ghost Poker
+|   |-- ghost-parchis.js             <-- Ghost Parchis (multi-instancia)
 |   |-- game-handlers/
 |   |   |-- index.js                 <-- Registro de handlers por GAME_ID
 |   |   |-- poker-handler.js         <-- Dealer de Texas Hold'em (server-side)
@@ -187,6 +194,9 @@ Buffer de 768 bytes en RAM + dirty index array (max 128). Si desborda, full flus
 
 ### Buffer teclado BIOS
 Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en flags inmediatamente tras Keyboard_Update.
+
+### Ghost service modular (v2.0)
+`ghost-service.js` refactorizado a entry point + 5 archivos por juego heredando de `GhostBase`. Soluciona cuelgue tras horas: backoff exponencial (1s -> 2s -> 4s ... cap 60s), `recvBuf` con cap 64KB, SIGTERM clean shutdown, `GhostRoomRegistry` para coordinar roomId compartido entre ghosts del mismo juego (Burdyn, Tetris, Parchis). Validado con test largo local 12h+ (RSS estable 30-38MB, 0 errores) antes de deploy al VPS.
 
 ---
 

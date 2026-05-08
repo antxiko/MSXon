@@ -77,7 +77,14 @@ MSXon/
 ├── server/              Servidor Node.js
 │   ├── msx-gameserver.js    Servidor principal (relay + aggregate + handlers)
 │   ├── server-status.js     Monitor interactivo
-│   ├── ghost-service.js     Ghost bots persistentes
+│   ├── ghost-service.js     Entry point modular ghosts (v2.0)
+│   ├── ghost-base.js        Clase base (plumbing, backoff, cleanup)
+│   ├── ghost-room-registry.js  Singleton coordinacion roomId
+│   ├── ghost-damas.js       Ghost Damas
+│   ├── ghost-burdyn.js      Ghost Burdyn (multi-instancia)
+│   ├── ghost-tetris.js      Ghost Tetris (multi-instancia)
+│   ├── ghost-poker.js       Ghost Poker
+│   ├── ghost-parchis.js     Ghost Parchis (multi-instancia)
 │   └── game-handlers/
 │       ├── index.js             Registro de handlers
 │       ├── poker-handler.js     Dealer Texas Hold'em
