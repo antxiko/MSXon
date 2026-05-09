@@ -4,10 +4,10 @@
 // test-register.js — Test E2E del flujo de registro QR
 //
 // Uso:
-//   node tools/test-register.js [username] [nick]
-//   defaults: username=antxiko, nick=Antxiko
+//   MSX_SERVER=tu.vps.ip node tools/test-register.js [username] [nick]
+//   defaults: server=127.0.0.1, username=myuser, nick=MyUser
 //
-// Conecta al VPS, manda REGISTER, recibe token, imprime URL para abrir en
+// Conecta al server, manda REGISTER, recibe token, imprime URL para abrir en
 // el móvil. Cuando pulses Enter (tras activar en móvil), pide password e
 // intenta LOGIN para verificar.
 // =============================================================================
@@ -15,11 +15,11 @@
 const net      = require('net');
 const readline = require('readline');
 
-const SERVER = process.env.MSX_SERVER || '217.154.107.144';
+const SERVER = process.env.MSX_SERVER || '127.0.0.1';
 const PORT   = parseInt(process.env.MSX_PORT || '9876', 10);
 const WEB_HOST = process.env.MSX_WEB_HOST || 'msxon.nosignalbbs.com';
-const username = process.argv[2] || 'antxiko';
-const nick     = process.argv[3] || 'Antxiko';
+const username = process.argv[2] || 'myuser';
+const nick     = process.argv[3] || 'MyUser';
 
 const CMD = {
     AUTH:           0x10,

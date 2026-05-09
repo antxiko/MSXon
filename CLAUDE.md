@@ -1,5 +1,5 @@
 # MSXon — Contexto del proyecto para Claude
-# Ultima actualizacion: 2026-05-08
+# Ultima actualizacion: 2026-05-09
 # Estado: 8 juegos + LOBBY.COM — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_029), Parchis (PAR_011), Texas (TEX_030), Tetris (TET_024), Among (AMG_001), Frog & Flies (FRG_012)
 
 ---
@@ -36,7 +36,9 @@ Codigo compartido en `shared/`: network.h, protocol.h, log.h, lobby_client.h/c
 MSXon/                           <-- Repo GitHub (antxiko/MSXon)
 |
 |-- server/
-|   |-- msx-gameserver.js            <-- Servidor TCP (relay + game handlers)
+|   |-- msx-gameserver.js            <-- Servidor TCP + HTTP integrado (puerto 9876 TCP, 8080 HTTP)
+|   |-- auth-store.js                <-- Almacen de usuarios (JSON atomico, scrypt, pending tokens)
+|   |-- msx-web.js                   <-- Endpoint HTTP /r para activacion via QR (detras de Caddy)
 |   |-- server-status.js             <-- Monitor interactivo + ghost player
 |   |-- ghost-service.js             <-- Entry point modular ghosts (v2.0)
 |   |-- ghost-base.js                <-- Clase base (plumbing comun, backoff, cleanup)
@@ -51,7 +53,12 @@ MSXon/                           <-- Repo GitHub (antxiko/MSXon)
 |   |   |-- poker-handler.js         <-- Dealer de Texas Hold'em (server-side)
 |   |   +-- frogflies-handler.js     <-- Moscas server-side para Frog & Flies
 |   |-- update.sh                    <-- Script de actualizacion VPS
-|   +-- msx-server.service           <-- Unidad systemd
+|   |-- msx-server.service           <-- Unidad systemd
+|   |-- users.json                   <-- (RUNTIME, no en git) cuentas activadas con scrypt hash
+|   +-- .superadmin                  <-- (RUNTIME, no en git) username del superadmin inicial
+|
+|-- tools/
+|   +-- test-register.js             <-- Test E2E del flujo REGISTER + activacion + LOGIN
 |
 |-- shared/                          <-- Codigo compartido entre juegos
 |   |-- network.h                    <-- Capa UNAPI TCP
@@ -122,16 +129,69 @@ MAX_PLAYERS_LIMIT = 16
 TIMEOUT_MS = 90000
 ```
 
-### VPS: 217.154.107.144
+### VPS: <VPS_IP>
 
 ```bash
 # Logs
-ssh root@217.154.107.144 "journalctl -u msx-server -f"
+ssh root@<VPS_IP> "journalctl -u msx-server -f"
 # Reiniciar
-ssh root@217.154.107.144 "systemctl restart msx-server"
+ssh root@<VPS_IP> "systemctl restart msx-server"
 # Desplegar
-cd ~/Documents/MSXonLIVE/MSXon && sed -i 's/\r$//' server/update.sh && scp server/msx-gameserver.js server/update.sh root@217.154.107.144:/tmp/ && ssh root@217.154.107.144 "bash /tmp/update.sh"
+cd ~/Documents/MSXonLIVE/MSXon && sed -i 's/\r$//' server/update.sh && scp server/msx-gameserver.js server/update.sh root@<VPS_IP>:/tmp/ && ssh root@<VPS_IP> "bash /tmp/update.sh"
 ```
+
+---
+
+## AUTH BACKEND (Fase 2 - server/auth-store.js + msx-web.js)
+
+Sistema de cuentas de usuario con registro autoservicio via QR. Coexiste con
+el AUTH legacy (token `0xDEADBEEF`) que sigue usando el ghost-service.
+
+### Arquitectura
+
+- **Storage**: `users.json` con escritura atomica (writeFile.tmp + rename, debounce 500ms).
+  Pendings en RAM con TTL 10 min, NO se persisten (restart invalida tokens en vuelo).
+- **Password hashing**: `scrypt` builtin de Node, formato `scrypt$N$salt_hex$hash_hex` con N=16384.
+- **Sesiones**: `Map<sessionId, {username, role, expiresAt}>` en RAM, TTL 5 min.
+- **Roles**: `superadmin` (0x03) / `admin` (0x02) / `user` (0x01).
+- **Bootstrap superadmin**: archivo `/opt/msx-server/.superadmin` con un username (no en git).
+  Cuando ese username activa su cuenta, role=superadmin se aplica automaticamente.
+
+### Flujo de registro autoservicio (decidido en plan v3)
+
+1. MSX → server: `REGISTER [user][nick]` (cmd 0x16)
+2. Server crea pending, devuelve `REG_PENDING [token-8B]` (cmd 0x17)
+3. MSX renderiza QR (con `qrcode_tiny.c` de MSXgl) con URL:
+   `https://msxon.nosignalbbs.com/r?u=<user>&t=<token>`
+4. Usuario escanea con movil → form HTML pide password (4-16 chars ASCII) → POST → server hashea con scrypt → cuenta activa
+5. MSX → server: `LOGIN [user][pass]` (cmd 0x13) → `LOGIN_OK [role][nickLen][nick][session 4B]` (cmd 0x14)
+
+### Web HTTPS (Caddy + letsencrypt)
+
+- Subdominio `msxon.nosignalbbs.com` (DNS A → <VPS_IP>).
+- Caddy en VPS hace TLS termination + reverse_proxy a `localhost:8080`.
+- Caddyfile (`/etc/caddy/Caddyfile`):
+  ```
+  msxon.nosignalbbs.com {
+      reverse_proxy 127.0.0.1:8080
+  }
+  ```
+- Cert renovacion automatica.
+
+### Permisos VPS criticos
+
+- Server corre como `User=nobody` (en `msx-server.service`).
+- `/opt/msx-server/` debe permitir escritura a `nogroup` para que se cree `users.json`:
+  `chgrp nogroup /opt/msx-server && chmod 775 /opt/msx-server`.
+- `.superadmin` debe ser legible por `nobody`:
+  `chown nobody:nogroup /opt/msx-server/.superadmin && chmod 644`.
+- Si fallan los permisos, en logs aparece `[auth] flush error: EACCES: permission denied`.
+
+### Visibilidad de juegos (TODO Fase 6)
+
+Pendiente: `games-store.js` + `games.json` con campo `visibility: public|private|disabled`.
+De momento solo filtrado en cliente, sin enforcement en server (decision consciente
+para hobbistas; revisar si la comunidad crece).
 
 ---
 
@@ -197,6 +257,9 @@ Vaciar PUTPNT=GETPNT cada frame para evitar acumulacion. Teclas se capturan en f
 
 ### Ghost service modular (v2.0)
 `ghost-service.js` refactorizado a entry point + 5 archivos por juego heredando de `GhostBase`. Soluciona cuelgue tras horas: backoff exponencial (1s -> 2s -> 4s ... cap 60s), `recvBuf` con cap 64KB, SIGTERM clean shutdown, `GhostRoomRegistry` para coordinar roomId compartido entre ghosts del mismo juego (Burdyn, Tetris, Parchis). Validado con test largo local 12h+ (RSS estable 30-38MB, 0 errores) antes de deploy al VPS.
+
+### Auth backend (Fase 2 cerrada 2026-05-09)
+Cuentas de usuario con scrypt + sesiones, registro autoservicio via QR mostrado en MSX y form HTTPS en movil (`msxon.nosignalbbs.com` con Caddy). Detalle completo en seccion "AUTH BACKEND" arriba. AUTH legacy (0xDEADBEEF) mantenido para ghost-service y server-status sin tocar. Cuenta superadmin bootstrap via archivo `.superadmin` no commiteado.
 
 ---
 

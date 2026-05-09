@@ -6,7 +6,7 @@ Guide for developers who want to write their own client for the MSXon network.
 
 ## Server
 
-- **IP**: 217.154.107.144
+- **IP**: <VPS_IP>
 - **Port**: 9876
 - **Transport**: TCP raw (no TLS)
 - **Auth token**: `0xDE 0xAD 0xBE 0xEF` (4 bytes, configurable via `MSX_AUTH_TOKEN` env var on server)
@@ -76,6 +76,28 @@ Total packet size: 6 + LEN bytes (max 261).
 |------|------|-----------|---------|-------------|
 | 0x01 | PING | C→S       | — | Keepalive |
 | 0x02 | PONG | S→C       | — | Keepalive response |
+
+### User auth (Fase 2 — coexists with legacy AUTH 0x10)
+
+Adds proper user accounts (username + scrypt password). Legacy `0x10 AUTH` token
+is still accepted for service connections (ghost-service, server-status). MSX
+clients use `LOGIN` for human users.
+
+| CMD  | Name           | Direction | Payload | Description |
+|------|----------------|-----------|---------|-------------|
+| 0x13 | LOGIN          | C→S       | `[ULEN][user...][PLEN][pass...]` | Authenticate with user/pass |
+| 0x14 | LOGIN_OK       | S→C       | `[role][NLEN][nick...][session_id 4B]` | Login OK. role: 0x01=user, 0x02=admin, 0x03=superadmin |
+| 0x15 | LOGIN_FAIL     | S→C       | `[reason]` | 1=bad_credentials, 2=not_found, 3=banned, 4=rate, 5=pending_setup |
+| 0x16 | REGISTER       | C→S       | `[ULEN][user...][NLEN][nick...]` | Request registration. Server creates pending entry, returns token |
+| 0x17 | REG_PENDING    | S→C       | `[TLEN][token...]` | Token to embed in QR (`https://msxon.nosignalbbs.com/r?u=&t=`). User completes activation in phone |
+| 0x18 | REG_FAIL       | S→C       | `[reason]` | 1=user_exists, 2=invalid_chars, 3=disabled, 4=pending_already |
+| 0x19 | LOGOUT         | C→S       | — | Invalidate current session (server-side) |
+| 0x1A | SESSION_RESUME | C→S       | `[session_id 4B]` | Resume existing session (used by individual game .COMs after lobby logged in). Response is `LOGIN_OK` |
+| 0x27 | GAME_LIST      | S→C       | `[N][gameId,flags,nameLen,name...] x N` | (reserved, not yet implemented) Server-side game catalog filtered by user role |
+
+Username: 3-16 chars `[a-zA-Z0-9_]`. Nick: 1-16 chars ASCII printable. Password: 4-16 chars ASCII printable.
+
+Tokens are 8 hex chars, valid for 10 minutes, stored only in server RAM (server restart invalidates pending tokens). Sessions are 4 random bytes, TTL 5 min, also RAM-only.
 
 ### Error
 
@@ -220,7 +242,7 @@ function buildPacket(cmd, room, pid, payload) {
     return pkt;
 }
 
-const sock = net.connect(9876, '217.154.107.144', () => {
+const sock = net.connect(9876, '<VPS_IP>', () => {
     // 1. Authenticate
     sock.write(buildPacket(0x10, 0, 0, AUTH_TOKEN));
 });

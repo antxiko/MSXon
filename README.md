@@ -74,8 +74,10 @@ Todos los juegos son backward compatible: funcionan sin LOBBY.COM.
 
 ```
 MSXon/
-├── server/              Servidor Node.js
-│   ├── msx-gameserver.js    Servidor principal (relay + aggregate + handlers)
+├── server/              Servidor Node.js (TCP 9876 + HTTP 8080 detras de Caddy)
+│   ├── msx-gameserver.js    Servidor principal (relay + aggregate + handlers + auth + web)
+│   ├── auth-store.js        Almacen de usuarios (JSON atomico + scrypt + pending tokens)
+│   ├── msx-web.js           Endpoint HTTP /r para activacion via QR
 │   ├── server-status.js     Monitor interactivo
 │   ├── ghost-service.js     Entry point modular ghosts (v2.0)
 │   ├── ghost-base.js        Clase base (plumbing, backoff, cleanup)
@@ -113,7 +115,7 @@ MSXon/
 
 ## Servidor
 
-**IP**: 217.154.107.144:9876
+**IP**: <VPS_IP>:9876
 
 Tres modos de sala:
 - **RELAY**: reenvía STATE_UPDATE a todos
@@ -122,15 +124,15 @@ Tres modos de sala:
 
 ```bash
 # Logs
-ssh root@217.154.107.144 "journalctl -u msx-server -f"
+ssh root@<VPS_IP> "journalctl -u msx-server -f"
 
 # Reiniciar
-ssh root@217.154.107.144 "systemctl restart msx-server"
+ssh root@<VPS_IP> "systemctl restart msx-server"
 
 # Desplegar
 cd MSXon && sed -i 's/\r$//' server/update.sh && \
 scp server/msx-gameserver.js server/game-handlers/*.js server/update.sh \
-root@217.154.107.144:/tmp/ && ssh root@217.154.107.144 "bash /tmp/update.sh"
+root@<VPS_IP>:/tmp/ && ssh root@<VPS_IP> "bash /tmp/update.sh"
 ```
 
 ---
