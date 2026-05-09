@@ -19,6 +19,12 @@ MSXgl/
 # Node
 node_modules/
 
+# Auth runtime data (contiene hashes de password, NO subir al repo)
+server/users.json
+server/users.json.tmp
+server/.superadmin
+server/ghost-service.js.bak.*
+
 # Claude Code
 .claude/
 tools/msxonline-cli/target/

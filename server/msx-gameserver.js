@@ -15,15 +15,24 @@
 //   sudo systemctl start msx-server
 // =============================================================================
 
-const net  = require('net');
+const net    = require('net');
+const crypto = require('crypto');
+const { AuthStore }      = require('./auth-store');
+const { mountWebServer } = require('./msx-web');
 
 // ── Configuración ─────────────────────────────────────────────
 const PORT               = 9876;
+const WEB_PORT           = parseInt(process.env.MSX_WEB_PORT || '8080', 10);
+const WEB_HOST           = process.env.MSX_WEB_HOST || '127.0.0.1';
 const AUTH_TOKEN         = Buffer.from(
   (process.env.MSX_AUTH_TOKEN || 'DEADBEEF'), 'hex'
 );
 const MAX_PLAYERS_LIMIT  = 16;       // Techo absoluto por sala
 const TIMEOUT_MS         = 90_000;   // 90s — generoso para el Z80
+
+// ── Auth store (shared con el HTTP server) ────────────────────
+const authStore = new AuthStore();
+authStore.init();
 
 // ── Protocolo ─────────────────────────────────────────────────
 const CMD = {
@@ -45,8 +54,66 @@ const CMD = {
   GAME_END:       0x33,
   STATE_UPDATE:   0x40,
   WORLD_STATE:    0x41,
+  // ── Auth de usuario (sesion-aware, distinto del AUTH legacy 0x10) ─
+  LOGIN:          0x13,
+  LOGIN_OK:       0x14,
+  LOGIN_FAIL:     0x15,
+  REGISTER:       0x16,
+  REG_PENDING:    0x17,
+  REG_FAIL:       0x18,
+  LOGOUT:         0x19,
+  SESSION_RESUME: 0x1A,
+  GAME_LIST:      0x27,
   ERROR:          0xFF,
 };
+
+// ── Roles ─────────────────────────────────────────────────────
+const ROLE_BYTE = { user: 0x01, admin: 0x02, superadmin: 0x03 };
+
+// ── Sesiones de usuario (4 byte sessionId, TTL 5min) ──────────
+const SESSION_TTL_MS = 5 * 60 * 1000;
+const sessions = new Map(); // sessionId hex string -> { username, role, expiresAt }
+
+function generateSessionId() {
+  return crypto.randomBytes(4);
+}
+
+function purgeExpiredSessions() {
+  const now = Date.now();
+  for (const [id, info] of sessions) {
+    if (info.expiresAt < now) sessions.delete(id);
+  }
+}
+
+// Reasons mapeados al wire para LOGIN_FAIL / REG_FAIL
+const LOGIN_FAIL_BAD_CREDS    = 1;
+const LOGIN_FAIL_NOT_FOUND    = 2;
+const LOGIN_FAIL_PENDING_SET  = 5;
+const REG_FAIL_USER_EXISTS    = 1;
+const REG_FAIL_INVALID_CHARS  = 2;
+const REG_FAIL_PENDING_ALREADY= 4;
+
+function mapLoginFailReason(reason) {
+  switch (reason) {
+    case 'bad_credentials':
+    case 'invalid_password': // no leak: tratar como bad creds
+    case 'invalid_username':
+      return LOGIN_FAIL_BAD_CREDS;
+    case 'not_found':         return LOGIN_FAIL_NOT_FOUND;
+    case 'pending_setup':     return LOGIN_FAIL_PENDING_SET;
+    default:                  return LOGIN_FAIL_BAD_CREDS;
+  }
+}
+
+function mapRegFailReason(reason) {
+  switch (reason) {
+    case 'user_exists':       return REG_FAIL_USER_EXISTS;
+    case 'invalid_username':
+    case 'invalid_nick':      return REG_FAIL_INVALID_CHARS;
+    case 'pending_already':   return REG_FAIL_PENDING_ALREADY;
+    default:                  return REG_FAIL_INVALID_CHARS;
+  }
+}
 
 const PROTO_HEADER_SZ = 6;
 const MAGIC_0 = 0x46; // 'F'
@@ -256,9 +323,13 @@ function leaveRoom(socket, state) {
 
 // ── Lógica de comandos ─────────────────────────────────────────
 
+// Comandos permitidos antes de autenticar (AUTH legacy o LOGIN/REGISTER nuevos)
+const PRE_AUTH_CMDS = new Set([
+  CMD.AUTH, CMD.PING, CMD.LOGIN, CMD.REGISTER, CMD.SESSION_RESUME,
+]);
+
 function handlePacket(socket, state, { cmd, payload }) {
-  // Sin auth solo se permite AUTH y PING
-  if (!state.auth && cmd !== CMD.AUTH && cmd !== CMD.PING) {
+  if (!state.auth && !PRE_AUTH_CMDS.has(cmd)) {
     socket.write(buildPacket(CMD.AUTH_FAIL));
     socket.destroy();
     return;
@@ -273,7 +344,7 @@ function handlePacket(socket, state, { cmd, payload }) {
     case CMD.AUTH:
       if (payload.slice(0, 4).equals(AUTH_TOKEN)) {
         state.auth = true;
-        console.log(`[${socket.remoteAddress}] Auth OK`);
+        console.log(`[${socket.remoteAddress}] Auth OK (legacy token)`);
         socket.write(buildPacket(CMD.AUTH_OK));
       } else {
         console.warn(`[${socket.remoteAddress}] Auth FALLIDA`);
@@ -281,6 +352,118 @@ function handlePacket(socket, state, { cmd, payload }) {
         socket.destroy();
       }
       break;
+
+    case CMD.REGISTER: {
+      // Payload: [ULEN][user...][NLEN][nick...]
+      if (payload.length < 2) { socket.write(buildPacket(CMD.REG_FAIL, 0, 0, Buffer.from([REG_FAIL_INVALID_CHARS]))); break; }
+      const uLen = payload[0];
+      if (payload.length < 1 + uLen + 1) { socket.write(buildPacket(CMD.REG_FAIL, 0, 0, Buffer.from([REG_FAIL_INVALID_CHARS]))); break; }
+      const username = payload.slice(1, 1 + uLen).toString('utf8');
+      const nLen = payload[1 + uLen];
+      if (payload.length < 1 + uLen + 1 + nLen) { socket.write(buildPacket(CMD.REG_FAIL, 0, 0, Buffer.from([REG_FAIL_INVALID_CHARS]))); break; }
+      const nick = payload.slice(1 + uLen + 1, 1 + uLen + 1 + nLen).toString('utf8');
+      const r = authStore.createPending(username, nick);
+      if (!r.ok) {
+        console.log(`[${socket.remoteAddress}] REGISTER fail user=${username} reason=${r.reason}`);
+        socket.write(buildPacket(CMD.REG_FAIL, 0, 0, Buffer.from([mapRegFailReason(r.reason)])));
+        break;
+      }
+      console.log(`[${socket.remoteAddress}] REGISTER pending user=${username} token=${r.token}`);
+      // Respuesta: [TLEN][token...]
+      const tokBuf = Buffer.from(r.token, 'utf8');
+      const pl = Buffer.concat([Buffer.from([tokBuf.length]), tokBuf]);
+      socket.write(buildPacket(CMD.REG_PENDING, 0, 0, pl));
+      break;
+    }
+
+    case CMD.LOGIN: {
+      // Payload: [ULEN][user...][PLEN][pass...]
+      if (payload.length < 2) { socket.write(buildPacket(CMD.LOGIN_FAIL, 0, 0, Buffer.from([LOGIN_FAIL_BAD_CREDS]))); break; }
+      const uLen = payload[0];
+      if (payload.length < 1 + uLen + 1) { socket.write(buildPacket(CMD.LOGIN_FAIL, 0, 0, Buffer.from([LOGIN_FAIL_BAD_CREDS]))); break; }
+      const username = payload.slice(1, 1 + uLen).toString('utf8');
+      const pLen = payload[1 + uLen];
+      if (payload.length < 1 + uLen + 1 + pLen) { socket.write(buildPacket(CMD.LOGIN_FAIL, 0, 0, Buffer.from([LOGIN_FAIL_BAD_CREDS]))); break; }
+      const password = payload.slice(1 + uLen + 1, 1 + uLen + 1 + pLen).toString('utf8');
+      const r = authStore.verifyLogin(username, password);
+      if (!r.ok) {
+        console.log(`[${socket.remoteAddress}] LOGIN fail user=${username} reason=${r.reason}`);
+        socket.write(buildPacket(CMD.LOGIN_FAIL, 0, 0, Buffer.from([mapLoginFailReason(r.reason)])));
+        break;
+      }
+      // Crear sesion
+      purgeExpiredSessions();
+      const sessionId = generateSessionId();
+      const sessionHex = sessionId.toString('hex');
+      sessions.set(sessionHex, {
+        username: r.user.username,
+        role: r.user.role,
+        expiresAt: Date.now() + SESSION_TTL_MS,
+      });
+      state.auth      = true;
+      state.loggedIn  = true;
+      state.username  = r.user.username;
+      state.role      = r.user.role;
+      state.sessionId = sessionHex;
+      console.log(`[${socket.remoteAddress}] LOGIN ok user=${username} role=${r.user.role} session=${sessionHex}`);
+      // Respuesta: [role][NLEN][nick...][session_id 4B]
+      const nickBuf = Buffer.from(r.user.nick, 'utf8');
+      const pl = Buffer.concat([
+        Buffer.from([ROLE_BYTE[r.user.role] || ROLE_BYTE.user, nickBuf.length]),
+        nickBuf,
+        sessionId,
+      ]);
+      socket.write(buildPacket(CMD.LOGIN_OK, 0, 0, pl));
+      break;
+    }
+
+    case CMD.LOGOUT: {
+      if (state.sessionId) {
+        sessions.delete(state.sessionId);
+        console.log(`[${socket.remoteAddress}] LOGOUT user=${state.username || '?'}`);
+      }
+      state.loggedIn  = false;
+      state.username  = null;
+      state.role      = null;
+      state.sessionId = null;
+      // Sin respuesta — el cliente cierra
+      break;
+    }
+
+    case CMD.SESSION_RESUME: {
+      // Payload: [session_id 4B]
+      if (payload.length < 4) {
+        socket.write(buildPacket(CMD.LOGIN_FAIL, 0, 0, Buffer.from([LOGIN_FAIL_BAD_CREDS])));
+        break;
+      }
+      purgeExpiredSessions();
+      const sid = payload.slice(0, 4).toString('hex');
+      const sess = sessions.get(sid);
+      if (!sess) {
+        console.log(`[${socket.remoteAddress}] SESSION_RESUME fail session=${sid} (not found)`);
+        socket.write(buildPacket(CMD.LOGIN_FAIL, 0, 0, Buffer.from([LOGIN_FAIL_BAD_CREDS])));
+        break;
+      }
+      // Sesion valida — restaurar estado
+      state.auth      = true;
+      state.loggedIn  = true;
+      state.username  = sess.username;
+      state.role      = sess.role;
+      state.sessionId = sid;
+      // Renovar TTL
+      sess.expiresAt = Date.now() + SESSION_TTL_MS;
+      console.log(`[${socket.remoteAddress}] SESSION_RESUME ok user=${sess.username} role=${sess.role}`);
+      // Respuesta misma forma que LOGIN_OK pero sin nick (ya lo tenia)
+      const u = authStore.getUser(sess.username);
+      const nickBuf = Buffer.from(u ? u.nick : sess.username, 'utf8');
+      const pl = Buffer.concat([
+        Buffer.from([ROLE_BYTE[sess.role] || ROLE_BYTE.user, nickBuf.length]),
+        nickBuf,
+        Buffer.from(sid, 'hex'),
+      ]);
+      socket.write(buildPacket(CMD.LOGIN_OK, 0, 0, pl));
+      break;
+    }
 
     case CMD.ROOM_CREATE: {
       const gameId = payload[0] ?? 0x01;
@@ -451,6 +634,9 @@ server.listen(PORT, '0.0.0.0', () => {
   console.log(`Timeout por conexión: ${TIMEOUT_MS / 1000}s`);
   console.log(`Comandos: rooms, connections, help`);
 });
+
+// ── HTTP web server (registro vía QR) ─────────────────────────
+mountWebServer({ authStore, port: WEB_PORT, host: WEB_HOST });
 
 // ── Consola interactiva ────────────────────────────────────────
 const readline = require('readline');
