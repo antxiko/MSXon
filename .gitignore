@@ -23,6 +23,7 @@ node_modules/
 server/users.json
 server/users.json.tmp
 server/.superadmin
+server/.cookie-secret
 server/ghost-service.js.bak.*
 
 # Claude Code
