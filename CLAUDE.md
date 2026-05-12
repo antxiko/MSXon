@@ -187,11 +187,65 @@ el AUTH legacy (token `0xDEADBEEF`) que sigue usando el ghost-service.
   `chown nobody:nogroup /opt/msx-server/.superadmin && chmod 644`.
 - Si fallan los permisos, en logs aparece `[auth] flush error: EACCES: permission denied`.
 
-### Visibilidad de juegos (TODO Fase 6)
+### Catalogo de juegos dinamico (`games-store.js` + `games.json`)
 
-Pendiente: `games-store.js` + `games.json` con campo `visibility: public|private|disabled`.
-De momento solo filtrado en cliente, sin enforcement en server (decision consciente
-para hobbistas; revisar si la comunidad crece).
+**Implementado**. El cliente MSX ya no tiene la tabla `g_Games[]` hardcoded; tras `LOGIN_OK` envia `CMD_GAME_LIST` (0x27) y el server responde con la lista filtrada por rol.
+
+Schema `games.json`:
+```json
+{ "id": 2, "name": "DAMAS", "com": "DAMAS", "max": 2, "proto": 1, "visibility": "public" }
+```
+
+`visibility`: `public` (todos) / `private` (solo admin/superadmin/service, marcado `[P]` en menu) / `disabled` (no se envia a nadie).
+
+Filtrado server-side en `msx-gameserver.js` handler `CMD.GAME_LIST`:
+- `user` → solo public.
+- `admin` / `superadmin` / `service` → public + private.
+- `disabled` → nunca enviado.
+
+Sin enforcement aun en `ROOM_CREATE`/`ROOM_JOIN` (un cliente con paquete crafted podria entrar a sala privada conociendo el roomId). Decision consciente para hobbistas; revisar si la comunidad crece.
+
+### Admin CLI (`admin.js`)
+
+Operacion sin tocar JSONs a mano:
+```bash
+node admin.js list-users | list-games | list-pending
+node admin.js promote <user> <role>  | demote <user>  | reset-password <user>
+node admin.js set-visibility <id> <vis>  | add-game ... | del-game <id>
+```
+Lee/escribe directamente `users.json` y `games.json`. El server NO tiene hot-reload; reiniciar `msx-server` tras cambios.
+
+### Panel web `/admin`
+
+`https://msxon.nosignalbbs.com/admin` — accesible desde movil. Login con cuenta `admin`/`superadmin`. Cookie firmada HMAC SHA256, secreto en `/opt/msx-server/.cookie-secret` (no commiteado, generado al primer arranque, persiste reinicios).
+
+Endpoints en `msx-web.js`:
+- `GET /admin/login`, `POST /admin/login` (form), `GET /admin/logout`.
+- `GET /admin` (dashboard: tabla users + pendientes + games).
+- `POST /admin/promote`, `/admin/reset-password`, `/admin/set-visibility`, `/admin/restart-server`.
+
+Restart-server llama `systemctl restart msx-server`. El proceso del server se mata pero la respuesta HTTP ya esta enviada antes del spawn (`detached: true`, `unref()`).
+
+### Cliente MSX `lobby/msxon.c` (binario `MSXON.COM`)
+
+Reemplaza al antiguo `LOBBY.COM`. **Toda la UI en Screen 5** (V9938 bitmap, BBS verde sobre negro). Estados:
+
+- `ST_INTRO` → logo MSXon (bitmap) + arpegio PSG Do-Mi-Sol-Do.
+- `ST_CHOICE` → 1=LOGIN / 2=REGISTER / ESC=salir.
+- `ST_LOGIN` → form usuario+pw. ENTER en pw → `NetConnectAndAuth` (AUTH legacy) → `NetLogin` → si OK, `NetFetchGameList` → `DrawMenu` → `ST_MENU`.
+- `ST_REGISTER` → form usuario+nick. ENTER en nick → `NetRegister` → si OK (`REG_PENDING`), guarda token y va a `ST_QR`.
+- `ST_QR` → genera QR con `tool/qrcode_tiny` (CPU-bound ~20s en hardware), spinner animado con hook H_TIMI ciclando paletas 4-7, render con `VDP_CommandHMMV` por modulo.
+- `ST_MENU` → menu de juegos (tabla dinamica `g_Games[16]` rellenada desde GAME_LIST). Cursores + ENTER, ESC sale.
+- `ST_LOBBY` → lista de salas filtrada por gameId. ENTER une, C crea, R refresca.
+- `ST_WAITING` → muestra players de la sala. Si `numP >= max` o llega el ultimo via `PLAYER_JOINED` → auto-launch del .COM.
+
+**Lanzamiento sin AUTOEXEC.BAT — keyboard stuffing**: en `LaunchGame()`, antes de `Bios_Exit(0)`, MSXon escribe `g_CurGame->comFile + \r` directamente al buffer del teclado MSX (`0xFBF0..0xFC0F`) y ajusta `PUTPNT/GETPNT` (`0xF3F8/0xF3FA`). El shell de MSX-DOS lee el buffer al recuperar control y ejecuta el comando como si lo tuvieras tipeado. Idiomatico en la escena MSX, sin trampolines `_LAUNCH.BAT`.
+
+`LOBBY.DAT` se sigue escribiendo (magic 0xAA, 8 bytes con conn/pid/roomId/active/gameId/proto) para que el juego siga la conexion del lobby. Los 8 juegos online ya recompilados con `LobbyClient_Load()` en su `main` reusan la conexion.
+
+**Edge detection del ENTER**: cuando se cambia de estado por paquete del server (`ST_LOBBY`, `ST_WAITING`, `ST_LAUNCHING`), `ProcessPacket` hace `while(Keyboard_IsKeyPressed(KEY_RET)) Halt();` antes de aplicar el cambio. Asi el ENTER del menu no se "arrastra" disparando JOIN inmediato en el lobby.
+
+**Tamano binario**: `lobby/msxon.c` con Screen 5 + bitmap font + qrcode_tiny + logo + dispatcher de estados pesa ~48KB. Requiere `ForceRamAddr=0xC000` en `project_config.js`.
 
 ---
 

@@ -19,11 +19,11 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 |-------|---------|-----------|------|--------|--------|
 | **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | Funcional (MOL_039) |
 | **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | Funcional (DAM_022) |
-| **Burdyn RPG** | 0x03 | 14 | AGGREGATE | Screen 4 | Funcional (BURD_029) |
+| **Burdyn RPG** | 0x03 | 14 | AGGREGATE | Screen 4 | Funcional (BURD_030) |
 | **Parchis** | 0x04 | 4 | RELAY | Screen 4 | Funcional (PAR_011) |
 | **Texas Hold'em** | 0x05 | 6 | RELAY+handler | Screen 4 | Funcional (TEX_030) |
 | **Tetris 4P** | 0x06 | 4 | RELAY | Screen 4 | Funcional (TET_024) |
-| **Among MSX** | 0x07 | 4-8 | RELAY | Screen 4 | En desarrollo (AMG_001) |
+| **Among MSX** | 0x07 | 4-8 | RELAY | Screen 4 | En desarrollo, single-player de momento (AMG_001, marcado `disabled` en games.json) |
 | **Frog & Flies** | 0x69 | 4 | RELAY+handler | Screen 4 | Funcional (FRG_012) |
 
 ### Ball Demo (`client/`)
@@ -52,21 +52,25 @@ Among Us simplificado para 4-8 jugadores. 7 habitaciones, 1 impostor. En desarro
 
 ---
 
-## LOBBY.COM — Lobby universal
+## MSXON.COM — Lobby universal
 
-Programa standalone (Screen 0) que hace de punto de entrada para todos los juegos:
+Programa standalone que hace de punto de entrada para todos los juegos. Toda la interfaz va en **Screen 5** (bitmap, BBS verde sobre negro):
 
-1. Selector de juegos (1-8)
-2. Diagnostico UNAPI (IP, gateway, servidor)
-3. Conectar al servidor, autenticar
-4. Lista de salas, crear/unir
-5. Waiting room (jugadores conectados, host pulsa S)
-6. Escribe `LOBBY.DAT` + `_LAUNCH.BAT`, sale
-7. El juego arranca, lee `LOBBY.DAT`, salta directamente a PLAYING
+1. **Intro**: logo MSXon con arpegio PSG (Do-Mi-Sol-Do).
+2. **CHOICE**: `[1] LOGIN  [2] REGISTRARSE  [ESC] salir`.
+3. **LOGIN**: form usuario+password. Tras `LOGIN_OK` el cliente pide el catálogo dinámico con `CMD_GAME_LIST`.
+4. **REGISTER**: form usuario+nick. Tras `REG_PENDING` el cliente renderiza un **QR** (con `tool/qrcode_tiny` de MSXgl) apuntando a `https://msxon.nosignalbbs.com/r?u=&t=`. El usuario escanea con el móvil, define password en el form HTML y vuelve al MSX a hacer LOGIN.
+5. **Menú dinámico**: muestra los juegos que el server envió en `GAME_LIST`, filtrados por el rol del usuario (`[P]` marca los `private` solo visibles a admin/superadmin; los `disabled` no se envían).
+6. **Lobby de sala**: lista de salas existentes para el juego elegido. ENTER une, C crea, R refresca.
+7. **Waiting**: muestra jugadores conectados. Si la sala se llena, MSXon **lanza el .COM del juego automáticamente**.
 
-La conexion TCP persiste entre programas porque UNAPI vive en el cartucho (ESP-01/GR8NET/ObsoNET), no en la RAM del .COM.
+### Lanzamiento del juego — keyboard stuffing
 
-Todos los juegos son backward compatible: funcionan sin LOBBY.COM.
+En lugar de depender de un trampolín en `AUTOEXEC.BAT`, MSXon escribe el comando del juego directamente al **buffer del teclado MSX** (`0xFBF0..0xFC0F`, ajustando `PUTPNT/GETPNT` en `0xF3F8/0xF3FA`) y termina con `Bios_Exit(0)`. El shell de MSX-DOS lee el buffer al recuperar control y ejecuta el comando — sin `_LAUNCH.BAT`, sin `autoexec.bat`.
+
+`LOBBY.DAT` se escribe igualmente para que el juego lea conexión, pid y sala. La conexión TCP persiste entre programas porque UNAPI vive en el cartucho (ESP-01/GR8NET/ObsoNET), no en la RAM del .COM.
+
+Todos los juegos son backward compatible: funcionan sin MSXon.
 
 ---
 
@@ -77,7 +81,11 @@ MSXon/
 ├── server/              Servidor Node.js (TCP 9876 + HTTP 8080 detras de Caddy)
 │   ├── msx-gameserver.js    Servidor principal (relay + aggregate + handlers + auth + web)
 │   ├── auth-store.js        Almacen de usuarios (JSON atomico + scrypt + pending tokens)
-│   ├── msx-web.js           Endpoint HTTP /r para activacion via QR
+│   ├── games-store.js       Catalogo de juegos (JSON atomico + visibility public/private/disabled)
+│   ├── games.json           Catalogo (commiteado, sin datos sensibles)
+│   ├── msx-web.js           Endpoint HTTP /r (activacion QR) + panel /admin (login + gestion)
+│   ├── admin.js             CLI de administracion (list-users, promote, set-visibility, ...)
+│   ├── test-game-list.js    Test del handler GAME_LIST
 │   ├── server-status.js     Monitor interactivo
 │   ├── ghost-service.js     Entry point modular ghosts (v2.0)
 │   ├── ghost-base.js        Clase base (plumbing, backoff, cleanup)
@@ -97,7 +105,7 @@ MSXon/
 │   ├── log.h                Logging MSX-DOS 2
 │   ├── lobby_client.h       Lee LOBBY.DAT (lanzado desde LOBBY.COM)
 │   └── lobby_client.c
-├── lobby/               LOBBY.COM standalone (Screen 0)
+├── lobby/               MSXON.COM standalone (Screen 5: intro/login/register/QR/menu)
 │   └── lobby_main.c
 ├── client/              Ball Demo (0x01)
 ├── damas/               Damas (0x02)
@@ -152,7 +160,51 @@ cd MSXgl/projects/tetris && bash build.sh      # Tetris 4P
 cd MSXgl/projects/frogflies && bash build.sh   # Frog & Flies
 ```
 
-**IMPORTANTE**: `ForceRamAddr = 0x8000` en `project_config.js` es obligatorio para evitar conflictos UNAPI.
+**IMPORTANTE**: `ForceRamAddr` en `project_config.js` es obligatorio para evitar conflictos UNAPI. Los juegos pequeños usan `0x8000` (32KB de código). MSXon (`lobby/msxon.c`) tiene Screen 5 + bitmap font + qrcode_tiny + logo y supera 32KB → usa `0xC000`.
+
+---
+
+## Catálogo de juegos y administración
+
+### `games.json` + visibility tri-state
+
+El catálogo vive en `server/games.json` (gestionado con `games-store.js`). Cada juego tiene `visibility`:
+
+- `public` → visible para cualquier usuario.
+- `private` → solo visible para `admin` / `superadmin` (marcado `[P]` en el menú).
+- `disabled` → no aparece en el menú para nadie. Útil para juegos en desarrollo o retirados temporalmente.
+
+El cliente MSX recibe la lista filtrada server-side cuando manda `CMD_GAME_LIST` tras `LOGIN_OK`.
+
+### CLI `admin.js`
+
+Operación desde el VPS (sin tocar JSONs a mano):
+
+```bash
+node admin.js list-users                         # tabla de usuarios + roles + lastLogin
+node admin.js list-games                         # catálogo + visibility
+node admin.js list-pending                       # tokens de activación pendientes
+node admin.js promote <user> <role>              # user/admin/superadmin
+node admin.js demote  <user>                     # atajo de "promote <user> user"
+node admin.js reset-password <user>              # invalida pw + genera token QR (URL clicable)
+node admin.js set-visibility <id> <vis>          # public | private | disabled
+node admin.js add-game <id> <name> <com> <max> <proto> <vis>
+node admin.js del-game <id>
+```
+
+Requiere reinicio del servidor para que `games-store` y `auth-store` carguen el JSON nuevo (no hay hot-reload):
+`systemctl restart msx-server`.
+
+### Panel web `/admin`
+
+`https://msxon.nosignalbbs.com/admin` — login con cuenta `admin` o `superadmin`. Permite:
+
+- Ver y gestionar usuarios (cambiar role inline, reset password con URL clicable).
+- Ver registros pendientes de activación (token + URL + minutos restantes).
+- Cambiar visibility de juegos.
+- **Reiniciar el servidor** con un botón.
+
+Cookie de sesión firmada con HMAC SHA256 (24h). Secreto persistente en `/opt/msx-server/.cookie-secret` (no commiteado).
 
 ---
 

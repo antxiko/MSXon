@@ -12,8 +12,10 @@ ssh root@<VPS_IP> "systemctl restart msx-server"
 # Estado del servicio
 ssh root@<VPS_IP> "systemctl status msx-server"
 
-# Desplegar nueva versión
-cd ~/Documents/MSXonLIVE/MSXon && sed -i 's/\r$//' server/update.sh && scp server/msx-gameserver.js server/update.sh root@<VPS_IP>:/tmp/ && ssh root@<VPS_IP> "bash /tmp/update.sh"
+# Desplegar nueva versión (msx-gameserver + msx-web + games-store + admin)
+cd ~/Documents/MSXonLIVE/MSXon/server && sed -i 's/\r$//' update.sh && \
+  scp msx-gameserver.js msx-web.js games-store.js games.json admin.js update.sh root@<VPS_IP>:/tmp/ && \
+  ssh root@<VPS_IP> "cp /tmp/msx-web.js /tmp/games-store.js /tmp/games.json /tmp/admin.js /opt/msx-server/ && bash /tmp/update.sh"
 ```
 
 ## Server Status (monitor local)
@@ -98,7 +100,40 @@ Caddy reverse_proxy → `127.0.0.1:8080` (Node HTTP en mismo proceso que TCP).
 # Flujo completo: REGISTER → URL para movil → LOGIN
 node tools/test-register.js [username] [nick]
 # Defaults: username=myuser, nick=MyUser
+
+# Test rápido del handler GAME_LIST
+node server/test-game-list.js <VPS_IP> 9876                       # solo AUTH legacy → role service
+node server/test-game-list.js <VPS_IP> 9876 <user> <password>     # también prueba LOGIN + filtrado por rol
 ```
+
+## Admin CLI (en el VPS)
+
+```bash
+# Listar usuarios y roles
+ssh root@<VPS_IP> "cd /opt/msx-server && node admin.js list-users"
+
+# Listar juegos del catálogo
+ssh root@<VPS_IP> "cd /opt/msx-server && node admin.js list-games"
+
+# Cambiar visibilidad de un juego (public | private | disabled)
+ssh root@<VPS_IP> "cd /opt/msx-server && node admin.js set-visibility 0x07 disabled && systemctl restart msx-server"
+
+# Promover usuario a admin/superadmin (o demote)
+ssh root@<VPS_IP> "cd /opt/msx-server && node admin.js promote <user> admin && systemctl restart msx-server"
+ssh root@<VPS_IP> "cd /opt/msx-server && node admin.js demote  <user>"
+
+# Reset password de un usuario (genera token QR nuevo + URL clicable, 10 min TTL)
+ssh root@<VPS_IP> "cd /opt/msx-server && node admin.js reset-password <user>"
+
+# Ayuda completa
+ssh root@<VPS_IP> "cd /opt/msx-server && node admin.js help"
+```
+
+## Panel web /admin (móvil)
+
+Abre `https://msxon.nosignalbbs.com/admin` en el móvil. Login con cuenta `admin` o `superadmin`. Permite gestionar usuarios (cambiar role, reset password con URL clicable), pendientes de activación, catálogo de juegos (cambiar visibility) y reiniciar el servidor.
+
+Cookie de sesión firmada con HMAC SHA256 (24h). Secreto persistente en `/opt/msx-server/.cookie-secret` (no commiteado).
 
 ## Git
 

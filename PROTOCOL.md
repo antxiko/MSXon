@@ -93,7 +93,25 @@ clients use `LOGIN` for human users.
 | 0x18 | REG_FAIL       | S→C       | `[reason]` | 1=user_exists, 2=invalid_chars, 3=disabled, 4=pending_already |
 | 0x19 | LOGOUT         | C→S       | — | Invalidate current session (server-side) |
 | 0x1A | SESSION_RESUME | C→S       | `[session_id 4B]` | Resume existing session (used by individual game .COMs after lobby logged in). Response is `LOGIN_OK` |
-| 0x27 | GAME_LIST      | S→C       | `[N][gameId,flags,nameLen,name...] x N` | (reserved, not yet implemented) Server-side game catalog filtered by user role |
+| 0x27 | GAME_LIST      | C→S / S→C | request: empty / response: `[N][gameId, flags, max, proto, comLen, com..., nameLen, name...] x N` | Cliente pide catálogo (tras LOGIN_OK), servidor responde con la lista filtrada por rol del usuario |
+
+Detalle de `GAME_LIST` (response):
+
+- `N` (1 byte): número de juegos visibles para el rol actual.
+- Por cada juego:
+  - `gameId` (1 byte): id numérico del juego (mismo que `ROOM_CREATE`).
+  - `flags` (1 byte): bit 0 = 1 si el juego es `private` (solo admin/superadmin lo ven), 0 si `public`. Los `disabled` no se envían nunca.
+  - `max` (1 byte): número máximo de jugadores por sala.
+  - `proto` (1 byte): versión de protocolo del juego (ROOM_CREATE byte 3).
+  - `comLen` + `com[comLen]`: nombre del fichero ejecutable 8.3 (ej. `DAMAS`, `BURDYN`, `FROGFLIE`).
+  - `nameLen` + `name[nameLen]`: nombre amigable (ej. `DAMAS`, `BURDYN RPG`).
+
+El catálogo se mantiene en `server/games.json` (gestionado con `games-store.js`). Filtrado server-side por rol:
+- `user` → solo `public`.
+- `admin` / `superadmin` / `service` → `public` + `private`.
+- `disabled` → nunca enviado.
+
+Modificar visibilidad: panel web `/admin` o `node admin.js set-visibility <id> public|private|disabled` (ver `COMMANDS.md`).
 
 Username: 3-16 chars `[a-zA-Z0-9_]`. Nick: 1-16 chars ASCII printable. Password: 4-16 chars ASCII printable.
 
