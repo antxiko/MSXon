@@ -18,6 +18,7 @@
 const net    = require('net');
 const crypto = require('crypto');
 const { AuthStore }      = require('./auth-store');
+const { GamesStore }     = require('./games-store');
 const { mountWebServer } = require('./msx-web');
 
 // ── Configuración ─────────────────────────────────────────────
@@ -33,6 +34,10 @@ const TIMEOUT_MS         = 90_000;   // 90s — generoso para el Z80
 // ── Auth store (shared con el HTTP server) ────────────────────
 const authStore = new AuthStore();
 authStore.init();
+
+// ── Games store (catálogo) ────────────────────────────────────
+const gamesStore = new GamesStore();
+gamesStore.init();
 
 // ── Protocolo ─────────────────────────────────────────────────
 const CMD = {
@@ -538,6 +543,30 @@ function handlePacket(socket, state, { cmd, payload }) {
       break;
     }
 
+    case CMD.GAME_LIST: {
+      // Respuesta: [N][gameId, flags, maxPlayers, proto, comLen, com..., nameLen, name...] x N
+      // flags bit0: 1=private (admin only), 0=public
+      // Cliente filtra y rellena su tabla de juegos. Disabled NO se envían.
+      const role = state.role || 'user';
+      const list = gamesStore.listVisibleFor(role);
+      const chunks = [Buffer.from([list.length])];
+      for (const g of list) {
+        const comBuf  = Buffer.from(g.com,  'utf8');
+        const nameBuf = Buffer.from(g.name, 'utf8');
+        const flags = g.visibility === 'private' ? 0x01 : 0x00;
+        chunks.push(Buffer.from([g.id, flags, g.max, g.proto, comBuf.length]));
+        chunks.push(comBuf);
+        chunks.push(Buffer.from([nameBuf.length]));
+        chunks.push(nameBuf);
+      }
+      const pl = Buffer.concat(chunks);
+      if (pl.length > 255) {
+        console.warn(`[gamelist] payload ${pl.length} > 255, truncating not implemented`);
+      }
+      socket.write(buildPacket(CMD.GAME_LIST, 0, 0, pl));
+      break;
+    }
+
     case CMD.ROOM_LEAVE:
       leaveRoom(socket, state);
       break;
@@ -636,7 +665,7 @@ server.listen(PORT, '0.0.0.0', () => {
 });
 
 // ── HTTP web server (registro vía QR) ─────────────────────────
-mountWebServer({ authStore, port: WEB_PORT, host: WEB_HOST });
+mountWebServer({ authStore, gamesStore, port: WEB_PORT, host: WEB_HOST });
 
 // ── Consola interactiva ────────────────────────────────────────
 const readline = require('readline');

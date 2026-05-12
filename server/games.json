@@ -1,0 +1,85 @@
+{
+  "schemaVer": 1,
+  "games": [
+    {
+      "id": 1,
+      "name": "BALL DEMO",
+      "com": "MSXONLIN",
+      "max": 4,
+      "proto": 1,
+      "visibility": "private"
+    },
+    {
+      "id": 2,
+      "name": "DAMAS",
+      "com": "DAMAS",
+      "max": 2,
+      "proto": 1,
+      "visibility": "public"
+    },
+    {
+      "id": 3,
+      "name": "BURDYN RPG",
+      "com": "BURDYN",
+      "max": 4,
+      "proto": 2,
+      "visibility": "public"
+    },
+    {
+      "id": 4,
+      "name": "PARCHIS",
+      "com": "PARCHIS",
+      "max": 4,
+      "proto": 1,
+      "visibility": "public"
+    },
+    {
+      "id": 5,
+      "name": "TEXAS HOLDEM",
+      "com": "TEXAS",
+      "max": 6,
+      "proto": 1,
+      "visibility": "public"
+    },
+    {
+      "id": 6,
+      "name": "TETRIS 4P",
+      "com": "TETRIS",
+      "max": 4,
+      "proto": 1,
+      "visibility": "public"
+    },
+    {
+      "id": 7,
+      "name": "AMONG MSX",
+      "com": "AMONG",
+      "max": 8,
+      "proto": 1,
+      "visibility": "disabled"
+    },
+    {
+      "id": 8,
+      "name": "BOMBERMAN",
+      "com": "BOMBER",
+      "max": 4,
+      "proto": 1,
+      "visibility": "private"
+    },
+    {
+      "id": 105,
+      "name": "FROG FLIES",
+      "com": "FROGFLIE",
+      "max": 4,
+      "proto": 1,
+      "visibility": "private"
+    },
+    {
+      "id": 112,
+      "name": "PUYO PUYO",
+      "com": "PUYOPUYO",
+      "max": 2,
+      "proto": 1,
+      "visibility": "disabled"
+    }
+  ]
+}
