@@ -66,6 +66,14 @@ class PokerGhost extends GhostBase {
             this.log('Partida iniciada');
             return;
         }
+        if (cmd === CMD.GAME_END) {
+            this.log('GAME_END recibido, sala libre');
+            this.gameStarted = false;
+            this.myTurn = false;
+            this.myCards = [0, 0];
+            this.currentBet = 0;
+            return;
+        }
         if (cmd === CMD.STATE_UPDATE && len >= 1) {
             const pkt = payload[0];
 

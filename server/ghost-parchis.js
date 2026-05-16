@@ -138,6 +138,11 @@ class ParchisGhost extends GhostBase {
             if (this.turn === this.mySlot) this.setTimer(() => this._takeTurn(), 2000);
             return;
         }
+        if (cmd === CMD.GAME_END) {
+            this.log('GAME_END recibido, sala libre');
+            this._initGameState();
+            return;
+        }
         if (cmd === CMD.STATE_UPDATE && len >= 6) {
             const action = payload[0];
             const endTurn = payload[4];
