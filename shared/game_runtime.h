@@ -36,7 +36,8 @@ typedef struct {
 extern GameContext g_Game;
 
 // Callback que el juego registra para procesar paquetes entrantes.
-typedef void (*GameRT_PacketCb)(u8 cmd, u8* payload, u8 len);
+// senderPid es el byte 4 del header (PID del emisor; 0 si viene del server).
+typedef void (*GameRT_PacketCb)(u8 cmd, u8 senderPid, u8* payload, u8 len);
 
 // Lee LOBBY.DAT, popula g_Game, hace Net_Init.
 // Devuelve TRUE si el juego fue lanzado desde MSXon. FALSE si no.

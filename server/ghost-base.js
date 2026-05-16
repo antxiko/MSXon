@@ -29,6 +29,7 @@ const CMD = {
     PLAYER_JOINED:  0x30,
     PLAYER_LEFT:    0x31,
     GAME_START:     0x32,
+    GAME_END:       0x33,
     STATE_UPDATE:   0x40,
 };
 

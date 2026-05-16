@@ -160,6 +160,14 @@ class TetrisGhost extends GhostBase {
             this.log('Partida iniciada');
             return;
         }
+        if (cmd === CMD.GAME_END) {
+            this.gameStarted = false;
+            this.dead = false;
+            for (let r = 0; r < TET_BH; r++)
+                for (let c = 0; c < TET_BW; c++) this.board[r][c] = 0;
+            this.log('GAME_END recibido, sala libre');
+            return;
+        }
         if (cmd === CMD.STATE_UPDATE && len >= 4 && payload[0] === 0x03) {
             // PKT_GARBAGE
             const garbTarget = payload[1];

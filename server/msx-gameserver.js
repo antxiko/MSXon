@@ -506,6 +506,12 @@ function handlePacket(socket, state, { cmd, payload }) {
       const roomId = payload[0];
       const room   = rooms.get(roomId);
       if (!room) { socket.write(buildPacket(CMD.ROOM_NOT_FOUND)); break; }
+      // Partida ya en curso en modo RELAY: no aceptar nuevos jugadores
+      // (en AGGREGATE/MMO se puede entrar siempre).
+      if (room.gameStarted && room.mode !== ROOM_MODE_AGGREGATE) {
+        socket.write(buildPacket(CMD.ROOM_FULL));
+        break;
+      }
       const pid = getNextPid(room);
       if (!pid) { socket.write(buildPacket(CMD.ROOM_FULL)); break; }
       // Auto-leave si ya estaba en una sala
@@ -521,6 +527,12 @@ function handlePacket(socket, state, { cmd, payload }) {
         CMD.ROOM_INFO, roomId, pid,
         Buffer.from([roomId, room.gameId, room.players.size, pid])
       ));
+      // AGGREGATE: si la partida ya arranco, notificar al recien entrado
+      // para que MSXon pueda lanzar el .COM (no aplica a RELAY porque ahi
+      // rechazamos el JOIN si gameStarted=true).
+      if (room.gameStarted && room.mode === ROOM_MODE_AGGREGATE) {
+        socket.write(buildPacket(CMD.GAME_START, roomId, 0));
+      }
       if (room.handler && room.handler.onPlayerJoined)
         room.handler.onPlayerJoined(room, pid);
       break;
@@ -608,6 +620,19 @@ function handlePacket(socket, state, { cmd, payload }) {
       }
       if (room.handler && room.handler.onGameStart)
         room.handler.onGameStart(room);
+      break;
+    }
+
+    case CMD.GAME_END: {
+      const room = rooms.get(state.roomId);
+      if (!room || !room.gameStarted) break; // idempotente
+      room.gameStarted = false;
+      stopRoomTick(state.roomId);
+      // Difundir a TODA la sala (incluido el emisor) para que ghosts reseteen
+      // y la sala vuelva a estar lista para nueva partida.
+      const pkt = buildPacket(CMD.GAME_END, state.roomId, 0);
+      for (const [, info] of room.players) info.socket.write(pkt);
+      console.log(`Sala ${state.roomId} GAME_END (lista para nueva partida)`);
       break;
     }
 

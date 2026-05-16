@@ -39,7 +39,7 @@ void GameRT_Poll(GameRT_PacketCb cb, u8 maxPackets)
             if (avail < plLen) break;
             Net_Recv(g_Game.conn, g_GRT_RecvPl, plLen);
         }
-        cb(g_GRT_RecvHdr[2], g_GRT_RecvPl, plLen);
+        cb(g_GRT_RecvHdr[2], g_GRT_RecvHdr[4], g_GRT_RecvPl, plLen);
     }
 }
 
