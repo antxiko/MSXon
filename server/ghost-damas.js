@@ -146,6 +146,10 @@ class DamasGhost extends GhostBase {
             this.log('Rival desconectado.');
             this._initGameState();
         }
+        else if (cmd === CMD.GAME_END) {
+            this.log('GAME_END recibido, sala libre');
+            this._initGameState();
+        }
         else if (cmd === CMD.STATE_UPDATE && len >= 5) {
             const fx = payload[0], fy = payload[1], tx = payload[2], ty = payload[3];
             const endTurn = payload[4];
