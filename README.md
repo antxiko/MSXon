@@ -5,11 +5,11 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 > **Estado v0.8 (2026-05-17)**: pipeline completo lobby ↔ juego ↔ lobby funcionando para los 7 juegos online. Lifecycle de sala con detección de winner, cierre automático y rechazo de JOIN durante partida (modo RELAY). UX del lobby pulida (cursor parcial sin parpadeo, mensajes de error visibles). El sistema es jugable end-to-end contra ghosts en VPS.
 
 ```
-  MSX ──ESP-01 WiFi──┐                 ┌──ObsoNET── MSX
+  MSX ──ESP-01 WiFi──┐                 ┌──Badcat──── MSX
                      │    ┌────────┐   │
-  MSX ──GR8NET──────┼────│ Server │───┤
+  MSX ──GR8Net──────┼────│ Server │───┤
                      │    │ Node.js│   │
-  MSX ──ObsoNET─────┘    └────────┘   └──GR8NET── MSX
+  MSX ──ESP-FPGA────┘    └────────┘   └──GR8Net──── MSX
                           TCP :9876
 ```
 
@@ -76,7 +76,7 @@ Programa standalone que hace de punto de entrada para todos los juegos. Toda la 
 
 En lugar de depender de un trampolín en `AUTOEXEC.BAT`, MSXon escribe el comando del juego directamente al **buffer del teclado MSX** (`0xFBF0..0xFC0F`, ajustando `PUTPNT/GETPNT` en `0xF3F8/0xF3FA`) y termina con `Bios_Exit(0)`. El shell de MSX-DOS lee el buffer al recuperar control y ejecuta el comando — sin `_LAUNCH.BAT`, sin `autoexec.bat`. Lo mismo de vuelta: cuando el juego termina, `GameRT_ExitToLobby()` stuffea `MSXON\r` y vuelve a DOS → MSXon re-arranca.
 
-`LOBBY.DAT` se escribe igualmente para que el juego lea conexión, pid y sala. La conexión TCP persiste entre programas porque UNAPI vive en el cartucho (ESP-01/GR8NET/ObsoNET), no en la RAM del .COM.
+`LOBBY.DAT` se escribe igualmente para que el juego lea conexión, pid y sala. La conexión TCP persiste entre programas porque UNAPI vive en el cartucho (ESP-01 WiFi / GR8Net / Badcat / ESP-FPGA), no en la RAM del .COM.
 
 ### Patrón thin-client: `game_runtime`
 
@@ -228,7 +228,12 @@ Cookie de sesión firmada con HMAC SHA256 (24h). Secreto persistente en `/opt/ms
 ## Hardware soportado
 
 - **MSX2** con MSX-DOS 2
-- **Red**: ESP-01 WiFi (UNAPI ducasp), ObsoNET, GR8NET
+- **Red**: cualquier solución UNAPI:
+  - **ESP-01 WiFi** con firmware UNAPI de ducasp (cartucho dongle).
+  - **GR8Net** (cartucho Ethernet de GR8Bit).
+  - **Badcat** (cartucho de red).
+  - **ESP-FPGA** para máquinas tipo OCM (módulo WiFi integrado en el FPGA).
+  - **[openMSXnet](https://github.com/antxiko/openMSXnet)** — fork de openMSX con device UNAPI builtin para desarrollar/testear sin hardware.
 - Funciona offline si no hay UNAPI
 
 ---
