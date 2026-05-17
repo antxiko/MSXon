@@ -1,6 +1,8 @@
-# MSXon
+# MSXon — v0.8
 
 Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre TCP/IP.
+
+> **Estado v0.8 (2026-05-17)**: pipeline completo lobby ↔ juego ↔ lobby funcionando para los 7 juegos online. Lifecycle de sala con detección de winner, cierre automático y rechazo de JOIN durante partida (modo RELAY). UX del lobby pulida (cursor parcial sin parpadeo, mensajes de error visibles). El sistema es jugable end-to-end contra ghosts en VPS.
 
 ```
   MSX ──ESP-01 WiFi──┐                 ┌──ObsoNET── MSX
@@ -15,16 +17,19 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 
 ## Juegos
 
-| Juego | GAME_ID | Jugadores | Modo | Screen | Estado |
-|-------|---------|-----------|------|--------|--------|
-| **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | Funcional (MOL_039) |
-| **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | Funcional (DAM_022) |
-| **Burdyn RPG** | 0x03 | 14 | AGGREGATE | Screen 4 | Funcional (BURD_030) |
-| **Parchis** | 0x04 | 4 | RELAY | Screen 4 | Funcional (PAR_011) |
-| **Texas Hold'em** | 0x05 | 6 | RELAY+handler | Screen 4 | Funcional (TEX_030) |
-| **Tetris 4P** | 0x06 | 4 | RELAY | Screen 4 | Funcional (TET_024) |
-| **Among MSX** | 0x07 | 4-8 | RELAY | Screen 4 | En desarrollo, single-player de momento (AMG_001, marcado `disabled` en games.json) |
-| **Frog & Flies** | 0x69 | 4 | RELAY+handler | Screen 4 | Funcional (FRG_012) |
+| Juego | GAME_ID | Jugadores | Modo | Screen | Lifecycle | Estado |
+|-------|---------|-----------|------|--------|-----------|--------|
+| **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | — | Funcional (MOL_039) |
+| **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | GAME_END | Funcional (DAM_022) |
+| **Burdyn RPG** | 0x03 | 14 | AGGREGATE | Screen 4 | MMO (sin GAME_END) | Funcional (BURD_029) |
+| **Parchis** | 0x04 | 4 | RELAY | Screen 4 | GAME_END | Funcional (PAR_011) |
+| **Texas Hold'em** | 0x05 | 6 | RELAY+handler | Screen 4 | GAME_END | Funcional (TEX_030) |
+| **Tetris 4P** | 0x06 | 4 | RELAY | Screen 4 | GAME_END | Funcional (TET_024) |
+| **Among MSX** | 0x07 | 4-8 | RELAY | Screen 4 | — | En desarrollo (AMG_001, `disabled` en games.json) |
+| **Bomberman** | 0x08 | 4 | RELAY | Screen 4 | GAME_END | Funcional (BMB_001) |
+| **Frog & Flies** | 0x69 | 4 | RELAY+handler | Screen 4 | — | Funcional (FRG_012) |
+
+**Lifecycle GAME_END**: cuando el cliente detecta winner único, muestra el mensaje 5s, envía `CMD_GAME_END` (0x33) al server y vuelve automáticamente a MSXon. El server difunde el END a la sala (los ghosts resetean su estado), pone `gameStarted=false` y la sala vuelve a admitir jugadores. Si alguien intenta entrar a una sala con `gameStarted=true` en modo RELAY, el server responde `ROOM_FULL` — MSXon lo muestra como "SALA OCUPADA O EN PARTIDA" en rojo y auto-refresca. En modo AGGREGATE (Burdyn MMO) el JOIN se permite siempre y el server reenvía `GAME_START` al recién entrado.
 
 ### Ball Demo (`client/`)
 Demo de sprites multijugador. Cada jugador mueve una bola por la pantalla en Screen 5 (bitmap). Hasta 4 jugadores por sala.
@@ -47,6 +52,9 @@ Tetris competitivo a 4 jugadores, 8 columnas por tablero. Full board sync empaqu
 ### Frog & Flies (`frogflies/`)
 Clon del Frog & Flies (1982). 4 ranas en nenufares cazan moscas. Charge-jump con 3 potencias. Moscas gestionadas 100% por el servidor (frogflies-handler.js): spawn cada 1.5s, movimiento a 10Hz, validacion de catches. Gana el primero en llegar a 20 moscas.
 
+### Bomberman (`bomberman/`)
+4 players grid-based: pone bombas, último vivo gana. Tablero compartido por relay. Mensaje "GANA Pn" 5s tras detectar winner único → `CMD_GAME_END` → vuelta a MSXon.
+
 ### Among MSX (`among/`)
 Among Us simplificado para 4-8 jugadores. 7 habitaciones, 1 impostor. En desarrollo.
 
@@ -66,11 +74,20 @@ Programa standalone que hace de punto de entrada para todos los juegos. Toda la 
 
 ### Lanzamiento del juego — keyboard stuffing
 
-En lugar de depender de un trampolín en `AUTOEXEC.BAT`, MSXon escribe el comando del juego directamente al **buffer del teclado MSX** (`0xFBF0..0xFC0F`, ajustando `PUTPNT/GETPNT` en `0xF3F8/0xF3FA`) y termina con `Bios_Exit(0)`. El shell de MSX-DOS lee el buffer al recuperar control y ejecuta el comando — sin `_LAUNCH.BAT`, sin `autoexec.bat`.
+En lugar de depender de un trampolín en `AUTOEXEC.BAT`, MSXon escribe el comando del juego directamente al **buffer del teclado MSX** (`0xFBF0..0xFC0F`, ajustando `PUTPNT/GETPNT` en `0xF3F8/0xF3FA`) y termina con `Bios_Exit(0)`. El shell de MSX-DOS lee el buffer al recuperar control y ejecuta el comando — sin `_LAUNCH.BAT`, sin `autoexec.bat`. Lo mismo de vuelta: cuando el juego termina, `GameRT_ExitToLobby()` stuffea `MSXON\r` y vuelve a DOS → MSXon re-arranca.
 
 `LOBBY.DAT` se escribe igualmente para que el juego lea conexión, pid y sala. La conexión TCP persiste entre programas porque UNAPI vive en el cartucho (ESP-01/GR8NET/ObsoNET), no en la RAM del .COM.
 
-Todos los juegos son backward compatible: funcionan sin MSXon.
+### Patrón thin-client: `game_runtime`
+
+Cada `.COM` de juego es un thin-client que delega plumbing en `shared/game_runtime.{c,h}`:
+
+- `GameRT_Init()` lee `LOBBY.DAT` (magic `0xAA`, 8 bytes con `{conn,pid,roomId,active,gameId,protoVer}`). Si no hay LOBBY.DAT, el juego imprime "lanzar desde MSXon" y sale (sin AUTH ni Net_Open propios).
+- `GameRT_Send(cmd, payload, len)` construye el header FM y manda. `GameRT_SendPing()` para keepalive.
+- `GameRT_Poll(cb, maxPkts)` lee paquetes y los pasa al callback `void cb(u8 cmd, u8 senderPid, u8* payload, u8 len)`.
+- `GameRT_ExitToLobby()` cierra TCP + keyboard stuffing `MSXON\r` + `Bios_Exit(0)`.
+
+El cliente no maneja conexión, autenticación ni rooms — todo eso lo hizo MSXon. Esto eliminó el lobby propio que cada juego tenía duplicado.
 
 ---
 

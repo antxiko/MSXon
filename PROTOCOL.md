@@ -1,6 +1,8 @@
-# MSXon — Protocol Specification v2.0
+# MSXon — Protocol Specification v2.1
 
 Guide for developers who want to write their own client for the MSXon network.
+
+> v2.1 (2026-05-17): adds `CMD_GAME_END` (0x33) and documents the server-side room lifecycle (RELAY rooms reject JOIN when `gameStarted=true`; AGGREGATE rooms accept and resend GAME_START).
 
 ---
 
@@ -46,11 +48,11 @@ Total packet size: 6 + LEN bytes (max 261).
 
 | CMD  | Name           | Direction | Payload | Description |
 |------|----------------|-----------|---------|-------------|
-| 0x20 | ROOM_CREATE    | C→S       | `[GAME_ID, MAX_PLAYERS]` | Create room. `MAX_PLAYERS` optional (default 4, max 16) |
-| 0x21 | ROOM_JOIN      | C→S       | `[ROOM_ID]` | Join existing room |
+| 0x20 | ROOM_CREATE    | C→S       | `[GAME_ID, MAX_PLAYERS, PROTO_VER]` | Create room. `MAX_PLAYERS` optional (default 4, max 16). `PROTO_VER >= 2` switches the room to AGGREGATE mode. |
+| 0x21 | ROOM_JOIN      | C→S       | `[ROOM_ID]` | Join existing room. Server replies `ROOM_FULL` if room is at capacity **or** if `gameStarted=true` in a RELAY room (no late join during an active game). AGGREGATE rooms accept JOIN at any time; if `gameStarted=true` the server also sends a `GAME_START` to the joiner so the client can launch the game .COM. |
 | 0x22 | ROOM_LEAVE     | C→S       | — | Leave current room |
 | 0x23 | ROOM_INFO      | S→C       | `[ROOM_ID, GAME_ID, N_PLAYERS, MY_PID]` | Room joined successfully |
-| 0x24 | ROOM_FULL      | S→C       | — | Room is full |
+| 0x24 | ROOM_FULL      | S→C       | — | Room is full or in-progress (RELAY) |
 | 0x25 | ROOM_NOT_FOUND | S→C       | — | Room doesn't exist |
 | 0x26 | ROOM_LIST      | C→S       | — | Request room list |
 | 0x26 | ROOM_LIST      | S→C       | `[N, ROOM_ID, GAME_ID, N_PLAYERS, ...]` | Room list response (max 84 rooms) |
@@ -61,7 +63,8 @@ Total packet size: 6 + LEN bytes (max 261).
 |------|----------------|-----------|---------|-------------|
 | 0x30 | PLAYER_JOINED  | S→C       | `[PID]` | New player joined your room |
 | 0x31 | PLAYER_LEFT    | S→C       | `[PID]` | Player left your room |
-| 0x32 | GAME_START     | C→S / S→C | — | Host (PID=1) starts game, broadcast to others |
+| 0x32 | GAME_START     | C→S / S→C | — | Host (PID=1) starts game, broadcast to others. Sets `room.gameStarted=true`. In AGGREGATE rooms, also sent S→C to a late joiner so they can launch the game .COM. |
+| 0x33 | GAME_END       | C→S / S→C | — | Any client can request end-of-round (idempotent). Server clears `gameStarted`, stops AGGREGATE tick, and broadcasts GAME_END to the whole room (including the sender) so ghosts reset and the room is ready to accept a new game. |
 
 ### Game Data
 

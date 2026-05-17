@@ -1,6 +1,15 @@
 # MSXon — Contexto del proyecto para Claude
-# Ultima actualizacion: 2026-05-09
-# Estado: 8 juegos + LOBBY.COM — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_029), Parchis (PAR_011), Texas (TEX_030), Tetris (TET_024), Among (AMG_001), Frog & Flies (FRG_012)
+# Ultima actualizacion: 2026-05-17
+# Version: 0.8
+# Estado: 9 juegos + MSXON.COM — Ball Demo (MOL_039), Damas (DAM_022), Burdyn (BURD_029), Parchis (PAR_011), Texas (TEX_030), Tetris (TET_024), Among (AMG_001 disabled), Bomberman (BMB_001), Frog & Flies (FRG_012)
+#
+# v0.8 highlights:
+# - Pipeline lobby ↔ juego ↔ lobby cerrado: GAME_END (0x33) libera la sala, RELAY rechaza JOIN si gameStarted, AGGREGATE acepta y reenvia GAME_START.
+# - Todos los .COM son thin-clients sobre shared/game_runtime.{c,h}: GameRT_Init/Send/Poll/ExitToLobby.
+# - GameRT_PacketCb extiende firma con senderPid (necesario para tetris/poker).
+# - MSXon (lobby/msxon.c) maneja ROOM_FULL/NOT_FOUND con mensaje rojo + auto-refresh.
+# - UX: cursor del menu y lista de salas con HMMV parcial (solo 12px), sin parpadeo de pantalla.
+# - Cliente envia CMD_GAME_END automaticamente tras detectar winner (5s mensaje + exit) en tetris/damas/parchis/texas/bomberman. Ghosts resetean al recibir GAME_END.
 
 ---
 
