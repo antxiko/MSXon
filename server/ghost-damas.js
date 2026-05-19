@@ -147,8 +147,13 @@ class DamasGhost extends GhostBase {
             this._initGameState();
         }
         else if (cmd === CMD.GAME_END) {
-            this.log('GAME_END recibido, sala libre');
+            this.log('GAME_END recibido — preparando nueva partida si hay rival');
             this._initGameState();
+            // En damas la partida arranca con 2 jugadores en sala. Si el
+            // rival sigue conectado (humano elige "ENTER nueva"), volvemos a
+            // gameStarted=true. Si el rival se ha ido, PLAYER_LEFT vendra
+            // detras y resetea otra vez a false.
+            if (this.roomId !== 0) this.gameStarted = true;
         }
         else if (cmd === CMD.STATE_UPDATE && len >= 5) {
             const fx = payload[0], fy = payload[1], tx = payload[2], ty = payload[3];

@@ -69,11 +69,47 @@ const CMD = {
   LOGOUT:         0x19,
   SESSION_RESUME: 0x1A,
   GAME_LIST:      0x27,
+  PLAYER_LIST:    0x28,  // C->S sin payload; S->C [N][PID,NLEN,nick] x N
+  // ── Chat global (solo usuarios loggeados, no ghosts) ─
+  CHAT_SEND:      0x50,  // C->S [LEN][texto utf8]
+  CHAT_RECV:      0x51,  // S->C [NLEN][nick][MLEN][texto]
+  CHAT_HISTORY:   0x52,  // C->S sin payload; S->C envia varios CHAT_RECV
   ERROR:          0xFF,
 };
 
 // ── Roles ─────────────────────────────────────────────────────
 const ROLE_BYTE = { user: 0x01, admin: 0x02, superadmin: 0x03 };
+
+// ── Chat global ───────────────────────────────────────────────
+const CHAT_BUFFER_SIZE = 50;
+const CHAT_MAX_MSG_LEN = 80;
+const chatBuffer = []; // { nick, msg } circular
+const chatSockets = new Set(); // sockets de usuarios humanos loggeados
+
+function buildChatRecvPacket(nick, msg) {
+  const nickB = Buffer.from(String(nick).slice(0, 16), 'utf8');
+  const msgB  = Buffer.from(String(msg).slice(0, CHAT_MAX_MSG_LEN), 'utf8');
+  const payload = Buffer.alloc(1 + nickB.length + 1 + msgB.length);
+  let off = 0;
+  payload[off++] = nickB.length;
+  nickB.copy(payload, off); off += nickB.length;
+  payload[off++] = msgB.length;
+  msgB.copy(payload, off);
+  return buildPacket(CMD.CHAT_RECV, 0, 0, payload);
+}
+
+function pushChat(nick, msg) {
+  chatBuffer.push({ nick, msg });
+  if (chatBuffer.length > CHAT_BUFFER_SIZE) chatBuffer.shift();
+}
+
+function broadcastChat(nick, msg) {
+  pushChat(nick, msg);
+  const pkt = buildChatRecvPacket(nick, msg);
+  for (const s of chatSockets) {
+    try { s.write(pkt); } catch (_) {}
+  }
+}
 
 // ── Sesiones de usuario (4 byte sessionId, TTL 5min) ──────────
 const SESSION_TTL_MS = 5 * 60 * 1000;
@@ -408,8 +444,10 @@ function handlePacket(socket, state, { cmd, payload }) {
       state.auth      = true;
       state.loggedIn  = true;
       state.username  = r.user.username;
+      state.nick      = r.user.nick;
       state.role      = r.user.role;
       state.sessionId = sessionHex;
+      chatSockets.add(socket);
       console.log(`[${socket.remoteAddress}] LOGIN ok user=${username} role=${r.user.role} session=${sessionHex}`);
       // Respuesta: [role][NLEN][nick...][session_id 4B]
       const nickBuf = Buffer.from(r.user.nick, 'utf8');
@@ -427,6 +465,7 @@ function handlePacket(socket, state, { cmd, payload }) {
         sessions.delete(state.sessionId);
         console.log(`[${socket.remoteAddress}] LOGOUT user=${state.username || '?'}`);
       }
+      chatSockets.delete(socket);
       state.loggedIn  = false;
       state.username  = null;
       state.role      = null;
@@ -455,6 +494,11 @@ function handlePacket(socket, state, { cmd, payload }) {
       state.username  = sess.username;
       state.role      = sess.role;
       state.sessionId = sid;
+      {
+        const uu = authStore.getUser(sess.username);
+        state.nick = uu ? uu.nick : sess.username;
+      }
+      chatSockets.add(socket);
       // Renovar TTL
       sess.expiresAt = Date.now() + SESSION_TTL_MS;
       console.log(`[${socket.remoteAddress}] SESSION_RESUME ok user=${sess.username} role=${sess.role}`);
@@ -489,7 +533,7 @@ function handlePacket(socket, state, { cmd, payload }) {
       }
       const room   = rooms.get(roomId);
       const pid    = 1; // El creador siempre es P1 (host)
-      room.players.set(pid, { socket, state: null, lastUpdate: Date.now() });
+      room.players.set(pid, { socket, connState: state, state: null, lastUpdate: Date.now() });
       state.roomId = roomId;
       state.pid    = pid;
       console.log(`[${socket.remoteAddress}] Crea sala ${roomId} (game=0x${gameId.toString(16)}, max=${maxPlayers}, mode=${mode ? 'AGGREGATE' : 'RELAY'})`);
@@ -516,7 +560,7 @@ function handlePacket(socket, state, { cmd, payload }) {
       if (!pid) { socket.write(buildPacket(CMD.ROOM_FULL)); break; }
       // Auto-leave si ya estaba en una sala
       if (state.roomId) leaveRoom(socket, state);
-      room.players.set(pid, { socket, state: null, lastUpdate: Date.now() });
+      room.players.set(pid, { socket, connState: state, state: null, lastUpdate: Date.now() });
       state.roomId = roomId;
       state.pid    = pid;
       console.log(`[${socket.remoteAddress}] Entra sala ${roomId} como P${pid}`);
@@ -636,6 +680,59 @@ function handlePacket(socket, state, { cmd, payload }) {
       break;
     }
 
+    case CMD.CHAT_SEND: {
+      // Solo aceptado de usuarios humanos loggeados (no AUTH legacy).
+      if (!state.loggedIn || !state.nick) break;
+      if (payload.length < 1) break;
+      const msgLen = payload[0];
+      if (msgLen === 0 || msgLen > CHAT_MAX_MSG_LEN || payload.length < 1 + msgLen) break;
+      const msg = payload.slice(1, 1 + msgLen).toString('utf8');
+      broadcastChat(state.nick, msg);
+      break;
+    }
+
+    case CMD.CHAT_HISTORY: {
+      if (!state.loggedIn) break;
+      // Enviar los ultimos mensajes (uno por paquete; el cliente acumula).
+      for (const m of chatBuffer) {
+        socket.write(buildChatRecvPacket(m.nick, m.msg));
+      }
+      break;
+    }
+
+    case CMD.PLAYER_LIST: {
+      // Responde con la lista de jugadores en la sala del cliente:
+      // [N] [PID, NLEN, nick...] x N
+      // Ghosts no tienen nick (usaron AUTH legacy) → ponemos "BOT" como nick.
+      if (!state.roomId) {
+        socket.write(buildPacket(CMD.PLAYER_LIST, 0, 0, Buffer.from([0])));
+        break;
+      }
+      const room = rooms.get(state.roomId);
+      if (!room) {
+        socket.write(buildPacket(CMD.PLAYER_LIST, 0, 0, Buffer.from([0])));
+        break;
+      }
+      const entries = [];
+      for (const [pid, info] of room.players) {
+        const nick = (info.connState && info.connState.nick) ? info.connState.nick : 'BOT';
+        const nickBuf = Buffer.from(String(nick).slice(0, 16), 'utf8');
+        entries.push({ pid, nick: nickBuf });
+      }
+      let totalLen = 1; // [N]
+      for (const e of entries) totalLen += 2 + e.nick.length;
+      const pl = Buffer.alloc(totalLen);
+      let off = 0;
+      pl[off++] = entries.length;
+      for (const e of entries) {
+        pl[off++] = e.pid;
+        pl[off++] = e.nick.length;
+        e.nick.copy(pl, off); off += e.nick.length;
+      }
+      socket.write(buildPacket(CMD.PLAYER_LIST, state.roomId, 0, pl));
+      break;
+    }
+
     default:
       socket.write(buildPacket(CMD.ERROR, 0, 0, Buffer.from([0x01])));
   }
@@ -669,6 +766,7 @@ const server = net.createServer((socket) => {
 
   socket.on('close', () => {
     leaveRoom(socket, state);
+    chatSockets.delete(socket);
     console.log(`[${socket.remoteAddress}] Desconectado`);
   });
 

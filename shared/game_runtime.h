@@ -58,6 +58,10 @@ void GameRT_SendPing(void);
 // Devuelve el número de bits a 1 en `g_Game.active`.
 u8 GameRT_ActiveCount(void);
 
+// Devuelve el nick del jugador pid (1-based). Si no hay nick (LOBBY.DAT v1
+// o slot vacio), devuelve un fallback "P1".."P9","Pa".."Pf" en buffer estatico.
+const c8* GameRT_GetNick(u8 pid);
+
 // Sale del juego y vuelve al lobby MSXon: cierra la conexión TCP,
 // escribe "MSXON\r" al keyboard buffer del MSX (0xFBF0..) y termina con
 // Bios_Exit(0). El shell de MSX-DOS lee el buffer y relanza MSXON.COM.

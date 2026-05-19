@@ -72,6 +72,20 @@ u8 GameRT_ActiveCount(void)
     return cnt;
 }
 
+static c8 g_GRT_NickFallback[4];
+const c8* GameRT_GetNick(u8 pid)
+{
+    if (pid >= 1 && pid <= LOBBY_MAX_NICKS && g_LobbyNicks[pid - 1][0]) {
+        return g_LobbyNicks[pid - 1];
+    }
+    // Fallback "Pn" (n en hex para PID > 9)
+    g_GRT_NickFallback[0] = 'P';
+    u8 n = pid;
+    if (n < 10)      { g_GRT_NickFallback[1] = '0' + n; g_GRT_NickFallback[2] = 0; }
+    else             { g_GRT_NickFallback[1] = 'a' + (n - 10); g_GRT_NickFallback[2] = 0; }
+    return g_GRT_NickFallback;
+}
+
 void GameRT_ExitToLobby(void)
 {
     // Cerrar conexión TCP por limpieza (libera el slot en el server)
