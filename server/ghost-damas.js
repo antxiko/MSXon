@@ -153,7 +153,13 @@ class DamasGhost extends GhostBase {
             // rival sigue conectado (humano elige "ENTER nueva"), volvemos a
             // gameStarted=true. Si el rival se ha ido, PLAYER_LEFT vendra
             // detras y resetea otra vez a false.
-            if (this.roomId !== 0) this.gameStarted = true;
+            if (this.roomId !== 0) {
+                this.gameStarted = true;
+                // Disparar onTick inmediatamente sin esperar 1.5s del setInterval.
+                setImmediate(() => {
+                    try { this.onTick(); } catch (e) { this.log(`onTick error tras GAME_END: ${e.stack || e}`); }
+                });
+            }
         }
         else if (cmd === CMD.STATE_UPDATE && len >= 5) {
             const fx = payload[0], fy = payload[1], tx = payload[2], ty = payload[3];

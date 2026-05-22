@@ -669,13 +669,18 @@ function handlePacket(socket, state, { cmd, payload }) {
 
     case CMD.GAME_END: {
       const room = rooms.get(state.roomId);
-      if (!room || !room.gameStarted) break; // idempotente
+      if (!room) break;
+      // No exigimos room.gameStarted=true: damas y otros juegos en RELAY no
+      // envian GAME_START, asi que gameStarted nunca pasa a true en el server,
+      // y antes este handler ignoraba el END por falsa idempotencia.
       room.gameStarted = false;
       stopRoomTick(state.roomId);
       // Difundir a TODA la sala (incluido el emisor) para que ghosts reseteen
       // y la sala vuelva a estar lista para nueva partida.
       const pkt = buildPacket(CMD.GAME_END, state.roomId, 0);
-      for (const [, info] of room.players) info.socket.write(pkt);
+      for (const [, info] of room.players) {
+        try { info.socket.write(pkt); } catch (_) {}
+      }
       console.log(`Sala ${state.roomId} GAME_END (lista para nueva partida)`);
       break;
     }
