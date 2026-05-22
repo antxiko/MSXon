@@ -352,8 +352,15 @@ function leaveRoom(socket, state) {
 
   if (room.players.size === 0) {
     stopRoomTick(state.roomId);
+    room.gameStarted = false;
     console.log(`Sala ${state.roomId} vacia (persiste)`);
   } else {
+    // Si la partida estaba en curso en modo RELAY y la sala ya no esta llena,
+    // desmarcar gameStarted para que nuevos jugadores puedan entrar.
+    if (room.gameStarted && room.mode !== ROOM_MODE_AGGREGATE && room.players.size < room.maxPlayers) {
+      room.gameStarted = false;
+      console.log(`Sala ${state.roomId} liberada (gameStarted=false, ${room.players.size}/${room.maxPlayers})`);
+    }
     broadcastToRoom(room, null,
       buildPacket(CMD.PLAYER_LEFT, state.roomId, 0, Buffer.from([state.pid]))
     );
@@ -550,11 +557,17 @@ function handlePacket(socket, state, { cmd, payload }) {
       const roomId = payload[0];
       const room   = rooms.get(roomId);
       if (!room) { socket.write(buildPacket(CMD.ROOM_NOT_FOUND)); break; }
-      // Partida ya en curso en modo RELAY: no aceptar nuevos jugadores
-      // (en AGGREGATE/MMO se puede entrar siempre).
+      // Partida ya en curso en modo RELAY: solo rechazar si la sala esta
+      // LLENA. Si tiene huecos, asumimos partida fantasma (alguien crasheo
+      // o salio dejando gameStarted=true) y limpiamos para permitir entrar.
+      // En AGGREGATE/MMO se puede entrar siempre.
       if (room.gameStarted && room.mode !== ROOM_MODE_AGGREGATE) {
-        socket.write(buildPacket(CMD.ROOM_FULL));
-        break;
+        if (room.players.size >= room.maxPlayers) {
+          socket.write(buildPacket(CMD.ROOM_FULL));
+          break;
+        }
+        room.gameStarted = false;
+        console.log(`Sala ${roomId} liberada en JOIN tardio (${room.players.size}/${room.maxPlayers})`);
       }
       const pid = getNextPid(room);
       if (!pid) { socket.write(buildPacket(CMD.ROOM_FULL)); break; }
