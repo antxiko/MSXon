@@ -17,7 +17,7 @@
 
 Plataforma de juegos online para MSX reales (Z80) con estos componentes:
 
-1. **LOBBY.COM** (`lobby/`) — lobby universal standalone, Screen 0, selector de juegos, connect/auth/salas/waiting
+1. **MSXON.COM** (`MSXgl/projects/msxon/`) — cliente universal Screen 5, login/registro QR, lista de salas, chat, lanza juegos via keyboard stuffing
 2. **Servidor Node.js** (`server/msx-gameserver.js`) — gestiona salas, relay, game handlers
 3. **Ball Demo** (`client/`) — demo de sprites multijugador en Screen 5 (GAME_ID=0x01)
 4. **Damas** (`damas/`) — damas online 2 jugadores en Screen 4 (GAME_ID=0x02)
@@ -76,7 +76,7 @@ MSXon/                           <-- Repo GitHub (antxiko/MSXon)
 |   |-- lobby_client.h               <-- Lee LOBBY.DAT (lanzado desde LOBBY.COM)
 |   +-- lobby_client.c               <-- Implementacion lobby_client
 |
-|-- lobby/                           <-- LOBBY.COM standalone (Screen 0)
+|-- (MSXON.COM se compila desde MSXgl/projects/msxon/ — Screen 5)
 |   +-- lobby_main.c                 <-- Selector de juegos + connect + salas
 |
 |-- client/                          <-- Ball Demo (GAME_ID=0x01, Screen 5)
@@ -235,7 +235,7 @@ Endpoints en `msx-web.js`:
 
 Restart-server llama `systemctl restart msx-server`. El proceso del server se mata pero la respuesta HTTP ya esta enviada antes del spawn (`detached: true`, `unref()`).
 
-### Cliente MSX `lobby/msxon.c` (binario `MSXON.COM`)
+### Cliente MSX `MSXgl/projects/msxon/msxon.c` (binario `MSXON.COM`)
 
 Reemplaza al antiguo `LOBBY.COM`. **Toda la UI en Screen 5** (V9938 bitmap, BBS verde sobre negro). Estados:
 
@@ -254,7 +254,7 @@ Reemplaza al antiguo `LOBBY.COM`. **Toda la UI en Screen 5** (V9938 bitmap, BBS 
 
 **Edge detection del ENTER**: cuando se cambia de estado por paquete del server (`ST_LOBBY`, `ST_WAITING`, `ST_LAUNCHING`), `ProcessPacket` hace `while(Keyboard_IsKeyPressed(KEY_RET)) Halt();` antes de aplicar el cambio. Asi el ENTER del menu no se "arrastra" disparando JOIN inmediato en el lobby.
 
-**Tamano binario**: `lobby/msxon.c` con Screen 5 + bitmap font + qrcode_tiny + logo + dispatcher de estados pesa ~48KB. Requiere `ForceRamAddr=0xC000` en `project_config.js`.
+**Tamano binario**: `MSXgl/projects/msxon/msxon.c` con Screen 5 + bitmap font + qrcode_tiny + logo + dispatcher de estados pesa ~48KB. Requiere `ForceRamAddr=0xC000` en `project_config.js`.
 
 ---
 
@@ -436,7 +436,7 @@ Cuentas de usuario con scrypt + sesiones, registro autoservicio via QR mostrado 
 - Backward compatible: juegos funcionan sin LOBBY.COM (lobby inline o offline)
 - LOBBY.DAT: magic(0xAA) + conn + pid + roomId + active + gameId + protoVer + reserved
 - Conexion UNAPI persiste entre programas (vive en el cartucho, no en RAM)
-- Compilar: `cd MSXgl/projects/lobby && bash build.sh`
+- Compilar: `cd MSXgl/projects/msxon && bash build.sh`
 
 ---
 

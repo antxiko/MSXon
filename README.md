@@ -122,7 +122,7 @@ MSXon/
 │   ├── log.h                Logging MSX-DOS 2
 │   ├── lobby_client.h       Lee LOBBY.DAT (lanzado desde LOBBY.COM)
 │   └── lobby_client.c
-├── lobby/               MSXON.COM standalone (Screen 5: intro/login/register/QR/menu)
+├── (MSXON.COM se compila desde MSXgl/projects/msxon/msxon.c — Screen 5: intro/login/register/QR/menu)
 │   └── lobby_main.c
 ├── client/              Ball Demo (0x01)
 ├── damas/               Damas (0x02)
@@ -167,7 +167,7 @@ root@<VPS_IP>:/tmp/ && ssh root@<VPS_IP> "bash /tmp/update.sh"
 Requiere [MSXgl](https://github.com/aoineko-fr/MSXgl) y SDCC 4.5.0.
 
 ```bash
-cd MSXgl/projects/lobby && bash build.sh       # LOBBY.COM
+cd MSXgl/projects/msxon && bash build.sh       # MSXON.COM
 cd MSXgl/projects/msxonline && bash build.sh   # Ball Demo
 cd MSXgl/projects/damas && bash build.sh       # Damas
 cd MSXgl/projects/burdyn && bash build.sh      # Burdyn
@@ -177,7 +177,7 @@ cd MSXgl/projects/tetris && bash build.sh      # Tetris 4P
 cd MSXgl/projects/frogflies && bash build.sh   # Frog & Flies
 ```
 
-**IMPORTANTE**: `ForceRamAddr` en `project_config.js` es obligatorio para evitar conflictos UNAPI. Los juegos pequeños usan `0x8000` (32KB de código). MSXon (`lobby/msxon.c`) tiene Screen 5 + bitmap font + qrcode_tiny + logo y supera 32KB → usa `0xC000`.
+**IMPORTANTE**: `ForceRamAddr` en `project_config.js` es obligatorio para evitar conflictos UNAPI. Los juegos pequeños usan `0x8000` (32KB de código). MSXon (`MSXgl/projects/msxon/msxon.c`) tiene Screen 5 + bitmap font + qrcode_tiny + logo y supera 32KB → usa `0xC000`.
 
 ---
 
