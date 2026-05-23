@@ -585,13 +585,30 @@ function handlePacket(socket, state, { cmd, payload }) {
         Buffer.from([roomId, room.gameId, room.players.size, pid])
       ));
       // AGGREGATE: si la partida ya arranco, notificar al recien entrado
-      // para que MSXon pueda lanzar el .COM (no aplica a RELAY porque ahi
-      // rechazamos el JOIN si gameStarted=true).
+      // para que MSXon pueda lanzar el .COM.
       if (room.gameStarted && room.mode === ROOM_MODE_AGGREGATE) {
         socket.write(buildPacket(CMD.GAME_START, roomId, 0));
       }
       if (room.handler && room.handler.onPlayerJoined)
         room.handler.onPlayerJoined(room, pid);
+      // RELAY: si la sala acaba de llenarse, disparar GAME_START
+      // automaticamente para no depender del ghost host (la logica del
+      // ghost de "joinedPid===N" es fragil si un ghost se desconecto).
+      // Excluimos juegos con maxPlayers<=2 (damas) donde el ghost arranca
+      // con PLAYER_JOINED y NO necesita GAME_START explicito. Si lo
+      // emitieramos, el STATE_UPDATE del primer move del ghost podria
+      // llegar a MSXon antes de lanzar el .COM y perderse.
+      if (!room.gameStarted &&
+          room.mode === ROOM_MODE_RELAY &&
+          room.maxPlayers >= 3 &&
+          room.players.size >= room.maxPlayers) {
+        room.gameStarted = true;
+        const startPkt = buildPacket(CMD.GAME_START, roomId, 0);
+        for (const [, info] of room.players) {
+          try { info.socket.write(startPkt); } catch (_) {}
+        }
+        console.log(`Sala ${roomId} llena (${room.players.size}/${room.maxPlayers}) — GAME_START automatico`);
+      }
       break;
     }
 
