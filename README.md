@@ -1,8 +1,8 @@
-# MSXon — v0.8
+# MSXon — v0.10
 
 Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre TCP/IP.
 
-> **Estado v0.8 (2026-05-17)**: pipeline completo lobby ↔ juego ↔ lobby funcionando para los 7 juegos online. Lifecycle de sala con detección de winner, cierre automático y rechazo de JOIN durante partida (modo RELAY). UX del lobby pulida (cursor parcial sin parpadeo, mensajes de error visibles). El sistema es jugable end-to-end contra ghosts en VPS.
+> **Estado v0.10 (2026-05-23)**: el pipeline lobby ↔ juego ↔ lobby de v0.9 ahora funciona de forma consistente en los 5 juegos públicos (damas, parchís, tetris, burdyn, texas). La pantalla de espera previa al lanzamiento del juego es uniforme: muestra siempre los nicks reales de los jugadores en sala y entra a la partida tras 3 segundos cuando el host es un bot (o el modo es AGGREGATE), o cuando el host humano pulsa ENTER. El código fuente del cliente MSXon pasa a estar versionado en este repo (`msxon/`).
 
 ```
   MSX ──ESP-01 WiFi──┐                 ┌──Badcat──── MSX
@@ -19,7 +19,7 @@ Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre 
 
 | Juego | GAME_ID | Jugadores | Modo | Screen | Lifecycle | Estado |
 |-------|---------|-----------|------|--------|-----------|--------|
-| **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | — | Funcional (MOL_039) |
+| **Ball Demo** | 0x01 | 4 | RELAY | Screen 5 | — | Deprecated (demo inicial del servicio) |
 | **Damas Online** | 0x02 | 2 | RELAY | Screen 4 | GAME_END | Funcional (DAM_022) |
 | **Burdyn RPG** | 0x03 | 14 | AGGREGATE | Screen 4 | MMO (sin GAME_END) | Funcional (BURD_029) |
 | **Parchis** | 0x04 | 4 | RELAY | Screen 4 | GAME_END | Funcional (PAR_011) |
@@ -122,8 +122,13 @@ MSXon/
 │   ├── log.h                Logging MSX-DOS 2
 │   ├── lobby_client.h       Lee LOBBY.DAT (lanzado desde LOBBY.COM)
 │   └── lobby_client.c
-├── (MSXON.COM se compila desde MSXgl/projects/msxon/msxon.c — Screen 5: intro/login/register/QR/menu)
-│   └── lobby_main.c
+├── msxon/               Cliente MSXon (Screen 5: intro/login/register/QR/menu/waiting)
+│   ├── msxon.c              Fuente principal
+│   ├── msxgl_config.h       Configuracion MSXgl
+│   ├── project_config.js    Build config
+│   ├── build.sh             Script de compilacion
+│   ├── log.h, network.h, protocol.h
+│   └── content/msxon_logo.h Asset logo
 ├── client/              Ball Demo (0x01)
 ├── damas/               Damas (0x02)
 ├── burdyn/              Burdyn RPG (0x03)

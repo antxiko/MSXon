@@ -118,6 +118,9 @@ class ParchisGhost extends GhostBase {
             const leftPid = payload[0];
             this.activePlayers &= ~(1 << (leftPid - 1));
             this.log(`Player left PID=${leftPid}`);
+            // Si la partida se quedo sin jugadores suficientes, resetear para
+            // que la proxima vez que se llene se dispare GAME_START otra vez.
+            this.gameStarted = false;
             return;
         }
         if (cmd === CMD.ROOM_FULL || cmd === CMD.ROOM_NOT_FOUND) {
@@ -144,9 +147,11 @@ class ParchisGhost extends GhostBase {
             return;
         }
         if (cmd === CMD.STATE_UPDATE && len >= 6) {
-            const action = payload[0];
+            // action 0=dado, 1=mov. endTurn=1 indica fin de turno (sea por
+            // movimiento o por no haber moves disponibles). En ambos casos
+            // hay que avanzar el turno.
             const endTurn = payload[4];
-            if (action === 1 && endTurn) {
+            if (endTurn) {
                 this._advanceTurn();
             }
         }
