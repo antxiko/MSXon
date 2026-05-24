@@ -1,8 +1,8 @@
-# MSXon — v0.10
+# MSXon — v0.11
 
 Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre TCP/IP.
 
-> **Estado v0.10 (2026-05-23)**: el pipeline lobby ↔ juego ↔ lobby de v0.9 ahora funciona de forma consistente en los 5 juegos públicos (damas, parchís, tetris, burdyn, texas). La pantalla de espera previa al lanzamiento del juego es uniforme: muestra siempre los nicks reales de los jugadores en sala y entra a la partida tras 3 segundos cuando el host es un bot (o el modo es AGGREGATE), o cuando el host humano pulsa ENTER. El código fuente del cliente MSXon pasa a estar versionado en este repo (`msxon/`).
+> **Estado v0.11 (2026-05-24)**: gestión de sesión completa en el cliente. La pantalla CHOICE pasa a ser un menú navegable con cursores y ENTER con cuatro opciones: LOGIN, REGISTRAR, RECUPERAR CONTRASEÑA y un tick LOGIN AUTOMATICO. Si el usuario tiene credenciales guardadas, MSXon entra solo al menú de juegos al volver de una partida (resume rápido) y al arrancar desde cero ofrece un countdown de 2 segundos antes del auto-login (cancelable con cualquier tecla). Recuperar contraseña funciona end-to-end (MSX → server → QR → web → vuelta al MSX) preservando el rol del usuario.
 
 ```
   MSX ──ESP-01 WiFi──┐                 ┌──Badcat──── MSX

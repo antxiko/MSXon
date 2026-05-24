@@ -214,9 +214,19 @@ class AuthStore {
         if (!info)                       return { ok: false, reason: 'invalid_token' };
         if (info.username !== username)  return { ok: false, reason: 'token_user_mismatch' };
         if (!RE_PASSWORD.test(password)) return { ok: false, reason: 'invalid_password' };
-        if (this.users.has(username))    return { ok: false, reason: 'user_exists' };
+        // En register normal el user no debe existir. En recovery (isRecovery=true)
+        // SI debe existir y lo sobreescribimos con la nueva password.
+        if (this.users.has(username) && !info.isRecovery) return { ok: false, reason: 'user_exists' };
 
-        const role = (this.superadminUsername && this.superadminUsername === username) ? 'superadmin' : 'user';
+        // Preferir el rol guardado en pending (caso recovery: preserva admin/superadmin
+        // del user original). Si no hay rol en pending (caso register normal), default
+        // a 'user' salvo que el username coincida con .superadmin.
+        let role;
+        if (info.role && VALID_ROLES.has(info.role)) {
+            role = info.role;
+        } else {
+            role = (this.superadminUsername && this.superadminUsername === username) ? 'superadmin' : 'user';
+        }
         const user = {
             username,
             nick: info.nick,
@@ -269,19 +279,29 @@ class AuthStore {
         return { ok: true, user: this._publicUser(u) };
     }
 
-    /** Resetea un usuario a estado pendiente (genera nuevo token, borra password). */
+    /**
+     * Inicia un reset de password: genera token y lo asocia al user en pending.
+     * NO borra el user de users.json — el password viejo sigue siendo valido
+     * hasta que el flow se complete via activatePending. Esto evita perder el
+     * usuario si el recovery se interrumpe (TTL pending expira, server reinicia,
+     * el usuario cierra el QR sin completar, etc).
+     *
+     * El flag isRecovery=true en el pending permite que activatePending
+     * sobreescriba el user existente (en register normal eso esta prohibido).
+     * Tambien preserva el rol original (admin/superadmin no se degradan).
+     */
     resetPassword(username) {
         const u = this.users.get(username);
         if (!u) return { ok: false, reason: 'not_found' };
+        this.cancelPending(username);
         const token = generateToken();
         this.pending.set(token, {
             username: u.username,
             nick: u.nick,
+            role: u.role,
+            isRecovery: true,
             expiresAt: now() + PENDING_TTL_MS,
         });
-        // Mantener el user pero invalidar password — se sobrescribirá al activatePending
-        this.users.delete(username);
-        this._scheduleFlush();
         return { ok: true, token };
     }
 

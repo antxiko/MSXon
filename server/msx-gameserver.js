@@ -66,6 +66,7 @@ const CMD = {
   REGISTER:       0x16,
   REG_PENDING:    0x17,
   REG_FAIL:       0x18,
+  RECOVER_REQ:    0x1B,  // C->S [ULEN][user] — pide reset de password (responde REG_PENDING o REG_FAIL)
   LOGOUT:         0x19,
   SESSION_RESUME: 0x1A,
   GAME_LIST:      0x27,
@@ -133,6 +134,7 @@ const LOGIN_FAIL_PENDING_SET  = 5;
 const REG_FAIL_USER_EXISTS    = 1;
 const REG_FAIL_INVALID_CHARS  = 2;
 const REG_FAIL_PENDING_ALREADY= 4;
+const REG_FAIL_USER_NOT_FOUND = 5;  // solo aplicable a RECOVER_REQ (no a REGISTER)
 
 function mapLoginFailReason(reason) {
   switch (reason) {
@@ -149,6 +151,7 @@ function mapLoginFailReason(reason) {
 function mapRegFailReason(reason) {
   switch (reason) {
     case 'user_exists':       return REG_FAIL_USER_EXISTS;
+    case 'not_found':         return REG_FAIL_USER_NOT_FOUND;
     case 'invalid_username':
     case 'invalid_nick':      return REG_FAIL_INVALID_CHARS;
     case 'pending_already':   return REG_FAIL_PENDING_ALREADY;
@@ -373,7 +376,7 @@ function leaveRoom(socket, state) {
 
 // Comandos permitidos antes de autenticar (AUTH legacy o LOGIN/REGISTER nuevos)
 const PRE_AUTH_CMDS = new Set([
-  CMD.AUTH, CMD.PING, CMD.LOGIN, CMD.REGISTER, CMD.SESSION_RESUME,
+  CMD.AUTH, CMD.PING, CMD.LOGIN, CMD.REGISTER, CMD.RECOVER_REQ, CMD.SESSION_RESUME,
 ]);
 
 function handlePacket(socket, state, { cmd, payload }) {
@@ -418,6 +421,35 @@ function handlePacket(socket, state, { cmd, payload }) {
       }
       console.log(`[${socket.remoteAddress}] REGISTER pending user=${username} token=${r.token}`);
       // Respuesta: [TLEN][token...]
+      const tokBuf = Buffer.from(r.token, 'utf8');
+      const pl = Buffer.concat([Buffer.from([tokBuf.length]), tokBuf]);
+      socket.write(buildPacket(CMD.REG_PENDING, 0, 0, pl));
+      break;
+    }
+
+    case CMD.RECOVER_REQ: {
+      // Payload: [ULEN][user...]
+      // Genera un nuevo token de password reset si el user existe. Responde
+      // CMD.REG_PENDING (mismo formato que REGISTER) o CMD.REG_FAIL.
+      // El usuario debera completar la nueva password via el QR/web igual que
+      // en el alta inicial. Se preserva el rol original.
+      if (payload.length < 1) {
+        socket.write(buildPacket(CMD.REG_FAIL, 0, 0, Buffer.from([REG_FAIL_INVALID_CHARS])));
+        break;
+      }
+      const uLen = payload[0];
+      if (payload.length < 1 + uLen) {
+        socket.write(buildPacket(CMD.REG_FAIL, 0, 0, Buffer.from([REG_FAIL_INVALID_CHARS])));
+        break;
+      }
+      const username = payload.slice(1, 1 + uLen).toString('utf8');
+      const r = authStore.resetPassword(username);
+      if (!r.ok) {
+        console.log(`[${socket.remoteAddress}] RECOVER fail user=${username} reason=${r.reason}`);
+        socket.write(buildPacket(CMD.REG_FAIL, 0, 0, Buffer.from([mapRegFailReason(r.reason)])));
+        break;
+      }
+      console.log(`[${socket.remoteAddress}] RECOVER pending user=${username} token=${r.token}`);
       const tokBuf = Buffer.from(r.token, 'utf8');
       const pl = Buffer.concat([Buffer.from([tokBuf.length]), tokBuf]);
       socket.write(buildPacket(CMD.REG_PENDING, 0, 0, pl));

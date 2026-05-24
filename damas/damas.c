@@ -16,6 +16,7 @@
 #include "network.h"
 #include "log.h"
 #include "lobby_client.h"
+#include "game_runtime.h"
 
 //=============================================================================
 // CONSTANTES
@@ -24,10 +25,12 @@
 #define GAME_ID_DAMAS   0x02
 
 // Tablero: 8x8 casillas, cada casilla 2x2 tiles = 16x16 tiles para el tablero
-// Tablero empieza en tile (8,4) para centrarlo: (8+16=24, 4+16=20)
-#define BOARD_TX        8       // Columna tile inicio tablero
+// Tablero en cols 0-15, panel info en cols 17-31.
+#define BOARD_TX        0       // Columna tile inicio tablero
 #define BOARD_TY        4       // Fila tile inicio tablero
 #define BOARD_SIZE      8       // 8x8 casillas
+#define PANEL_X         17      // Columna inicio del panel info
+#define PANEL_W         15      // Ancho del panel (cols 17..31)
 
 // Tiles (solo tablero)
 #define TILE_EMPTY      0       // Fondo negro
@@ -55,9 +58,7 @@
 #define SPR_CURSOR      0       // Sprite 0 = cursor (mayor prioridad, encima de todo)
 #define SPR_PIECES_START 1      // Sprites 1-24 = fichas
 
-// Red
-static const u8 SERVER_IP[4] = { 217, 154, 107, 144 };
-#define SERVER_PORT     9876
+// Red — IP/puerto los gestiona MSXon; aquí solo tunables locales
 #define PING_INTERVAL   250
 #define CMD_WORLD_STATE 0x41
 #define PROTO_VERSION_AGGREGATE 0x02
@@ -236,12 +237,10 @@ static u8 g_MustCapture = 0; // 1=ficha actual debe seguir capturando
 static u8 g_CapX = 0;       // Posicion de ficha que esta capturando
 static u8 g_CapY = 0;
 
-// Red
+// Red — heredados del lobby vía GameRT_Init() (alias por compatibilidad)
 static NetConn g_Conn = NET_INVALID_CONN;
 static u8 g_MyPid = 0;
 static u8 g_RoomId = 0;
-static u16 g_PingTimer = 0;
-static u8 g_SendBuf[20];
 static u8 g_MoveDelay = 0;
 static bool g_BoardDirty = TRUE;
 
@@ -429,7 +428,6 @@ void CheckGameOver(void)
 
 // Forward declarations
 void Net_SendMove(u8 fromX, u8 fromY, u8 toX, u8 toY, u8 endTurn);
-void Lobby_Draw(void);
 
 void Board_Init(void)
 {
@@ -456,6 +454,71 @@ void Board_Init(void)
 // TABLERO: DIBUJAR AL BUFFER
 //=============================================================================
 
+// ── Panel info lateral ────────────────────────────────────────────
+// Cols PANEL_X..31, filas: 2-3 nicks, 6-7 turno, 9 cabecera log, 11-20 log.
+
+#define LOG_MAX_ROWS 10
+#define LOG_LINE_LEN 14   // chars por linea visible
+static c8 g_LogLines[LOG_MAX_ROWS][LOG_LINE_LEN + 1];
+static u8 g_LogCount = 0;
+
+static void Log_Add(const c8* text)
+{
+    if(g_LogCount == LOG_MAX_ROWS) {
+        u8 i, j;
+        for(i = 0; i < LOG_MAX_ROWS - 1; i++)
+            for(j = 0; j <= LOG_LINE_LEN; j++) g_LogLines[i][j] = g_LogLines[i+1][j];
+        g_LogCount--;
+    }
+    u8 idx = g_LogCount;
+    u8 p = 0;
+    while(text[p] && p < LOG_LINE_LEN) { g_LogLines[idx][p] = text[p]; p++; }
+    g_LogLines[idx][p] = 0;
+    g_LogCount++;
+}
+
+static void Panel_ClearRow(u8 row)
+{
+    Buf_PutText(PANEL_X, row, "               "); // 15 espacios
+}
+
+static void HUD_DrawNicks(void)
+{
+    Panel_ClearRow(2);
+    Panel_ClearRow(3);
+    Buf_PutText(PANEL_X,     2, "B:");
+    Buf_PutText(PANEL_X + 2, 2, GameRT_GetNick(1));
+    Buf_PutText(PANEL_X,     3, "N:");
+    Buf_PutText(PANEL_X + 2, 3, GameRT_GetNick(2));
+}
+
+static void HUD_DrawTurn(void)
+{
+    Panel_ClearRow(6);
+    Panel_ClearRow(7);
+    Buf_PutText(PANEL_X, 6, "TURNO:");
+    if(g_Turn == PIECE_WHITE) Buf_PutText(PANEL_X + 2, 7, "BLANCAS");
+    else                       Buf_PutText(PANEL_X + 2, 7, "NEGRAS");
+}
+
+static void HUD_DrawLog(void)
+{
+    u8 r;
+    Panel_ClearRow(9);
+    Buf_PutText(PANEL_X, 9, "---LOG---");
+    for(r = 0; r < LOG_MAX_ROWS; r++) {
+        Panel_ClearRow(11 + r);
+        if(r < g_LogCount) Buf_PutText(PANEL_X, 11 + r, g_LogLines[r]);
+    }
+}
+
+static void HUD_DrawAll(void)
+{
+    HUD_DrawNicks();
+    HUD_DrawTurn();
+    HUD_DrawLog();
+}
+
 void Board_Draw(void)
 {
     u8 bx, by, tx, ty;
@@ -464,6 +527,8 @@ void Board_Draw(void)
     // Limpiar todo
     for(idx = 0; idx < 768; idx++) g_NameBuf[idx] = TILE_EMPTY;
     g_FullFlush = TRUE;
+
+    HUD_DrawAll();
 
     // Solo dibujar casillas (las fichas son sprites)
     for(by = 0; by < BOARD_SIZE; by++)
@@ -702,8 +767,10 @@ void Move_Execute(u8 fromX, u8 fromY, u8 toX, u8 toY)
     i8 dx, dy, sx, sy, dist, i;
     u8 wasCapture = 0;
     u8 piece;
+    u8 isWhite;
 
     piece = g_Board[fromY][fromX];
+    isWhite = (piece == PIECE_WHITE || piece == PIECE_WHITE_KING);
     g_Board[toY][toX] = piece;
     g_Board[fromY][fromX] = PIECE_NONE;
 
@@ -726,11 +793,19 @@ void Move_Execute(u8 fromX, u8 fromY, u8 toX, u8 toY)
         }
     }
 
+    if(wasCapture) {
+        Log_Add(isWhite ? "B COME N" : "N COME B");
+    }
+
     // Promocion: ficha llega al extremo opuesto
-    if(piece == PIECE_WHITE && toY == 0)
+    if(piece == PIECE_WHITE && toY == 0) {
         g_Board[toY][toX] = PIECE_WHITE_KING;
-    if(piece == PIECE_BLACK && toY == BOARD_SIZE - 1)
+        Log_Add("B CORONA");
+    }
+    if(piece == PIECE_BLACK && toY == BOARD_SIZE - 1) {
         g_Board[toY][toX] = PIECE_BLACK_KING;
+        Log_Add("N CORONA");
+    }
 
     // Si fue captura, comprobar si puede seguir capturando
     if(wasCapture && CanCapture(toX, toY))
@@ -748,10 +823,13 @@ void Move_Execute(u8 fromX, u8 fromY, u8 toX, u8 toY)
     else
     {
         // Cambiar turno
+        if(!wasCapture) Log_Add(isWhite ? "MUEVE B" : "MUEVE N");
         g_MustCapture = 0;
         g_Turn = (g_Turn == PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
     }
 
+    HUD_DrawTurn();
+    HUD_DrawLog();
     g_BoardDirty = TRUE;
 }
 
@@ -860,343 +938,29 @@ void Game_ProcessInput(void)
 }
 
 //=============================================================================
-// DIAGNOSTICO DE RED
+// SESIÓN (heredada del lobby MSXon vía game_runtime.h)
 //=============================================================================
-
-void Diag_PrintDec(u8 val)
-{
-    u8 h, t, u;
-    h = val / 100;
-    t = (val % 100) / 10;
-    u = val % 10;
-    if(h > 0) DOS_CharOutput('0' + h);
-    if(h > 0 || t > 0) DOS_CharOutput('0' + t);
-    DOS_CharOutput('0' + u);
-}
-
-void Diag_PrintIP(const u8* ip)
-{
-    u8 i;
-    for(i = 0; i < 4; i++)
-    {
-        Diag_PrintDec(ip[i]);
-        if(i < 3) DOS_CharOutput('.');
-    }
-}
-
-void Diag_ShowNetInfo(void)
-{
-    u8 localIP[4];
-    u8 ok;
-
-    DOS_StringOutput("================================\r\n$");
-    DOS_StringOutput("   DAMAS ONLINE - DIAGNOSTICS\r\n$");
-    DOS_StringOutput("================================\r\n\r\n$");
-
-    DOS_StringOutput("UNAPI TCP/IP: $");
-    ok = (tcpip_enumerate() > 0) ? 1 : 0;
-    if(ok)
-        DOS_StringOutput("ENCONTRADO\r\n$");
-    else
-    {
-        DOS_StringOutput("NO ENCONTRADO\r\n\r\n$");
-        DOS_StringOutput("Juego arrancara OFFLINE.\r\n$");
-        DOS_StringOutput("Pulsa ESPACIO para continuar...$");
-        DOS_CharInput();
-        return;
-    }
-
-    tcpip_get_ipinfo(&g_IpInfo);
-
-    DOS_StringOutput("IP local    : $");
-    localIP[0] = (u8)g_IpInfo.local_ip[0];
-    localIP[1] = (u8)g_IpInfo.local_ip[1];
-    localIP[2] = (u8)g_IpInfo.local_ip[2];
-    localIP[3] = (u8)g_IpInfo.local_ip[3];
-    Diag_PrintIP(localIP);
-    DOS_StringOutput("\r\n$");
-
-    DOS_StringOutput("Mascara     : $");
-    localIP[0] = (u8)g_IpInfo.subnet_mask[0];
-    localIP[1] = (u8)g_IpInfo.subnet_mask[1];
-    localIP[2] = (u8)g_IpInfo.subnet_mask[2];
-    localIP[3] = (u8)g_IpInfo.subnet_mask[3];
-    Diag_PrintIP(localIP);
-    DOS_StringOutput("\r\n$");
-
-    DOS_StringOutput("Gateway     : $");
-    localIP[0] = (u8)g_IpInfo.gateway_ip[0];
-    localIP[1] = (u8)g_IpInfo.gateway_ip[1];
-    localIP[2] = (u8)g_IpInfo.gateway_ip[2];
-    localIP[3] = (u8)g_IpInfo.gateway_ip[3];
-    Diag_PrintIP(localIP);
-    DOS_StringOutput("\r\n$");
-
-    DOS_StringOutput("\r\nServidor    : $");
-    Diag_PrintIP(SERVER_IP);
-    DOS_StringOutput("\r\n$");
-
-    DOS_StringOutput("Puerto      : $");
-    {
-        u16 port = SERVER_PORT;
-        u8 d[5];
-        u8 i, started;
-        d[0] = (u8)(port / 10000); port %= 10000;
-        d[1] = (u8)(port / 1000);  port %= 1000;
-        d[2] = (u8)(port / 100);   port %= 100;
-        d[3] = (u8)(port / 10);    port %= 10;
-        d[4] = (u8)(port);
-        started = 0;
-        for(i = 0; i < 5; i++)
-        {
-            if(d[i] > 0 || started || i == 4)
-            {
-                DOS_CharOutput('0' + d[i]);
-                started = 1;
-            }
-        }
-    }
-    DOS_StringOutput("\r\n$");
-
-    DOS_StringOutput("\r\nPulsa ESPACIO para continuar...$");
-    DOS_CharInput();
-    DOS_StringOutput("\r\n$");
-}
-
-//=============================================================================
-// RED: CONEXION
-//=============================================================================
-
-void Net_Wait50(void)
-{
-    u8 w;
-    for(w = 0; w < 25; w++) Halt();
-}
-
-bool Net_ConnectToServer(void)
-{
-    u8 tcpState;
-    u16 timeout;
-
-    Log_Init();
-    Log_Write("[INIT] Damas arrancando");
-
-    // Buscar UNAPI
-    if(Net_Init() != NET_OK)
-    {
-        Log_Write("[CONN] UNAPI no hallado");
-        return FALSE;
-    }
-    Log_WriteHex("[CONN] UNAPI OK impl=", g_NetImplCount);
-
-    Net_Wait50();
-
-    // IP local
-    tcpip_get_ipinfo(&g_IpInfo);
-    Log_WriteHex("[CONN] IP=", (u8)g_IpInfo.local_ip[0]);
-
-    Net_Wait50();
-
-    // Abrir TCP
-    Log_Write("[CONN] Abriendo TCP...");
-    g_Conn = Net_Open(SERVER_IP, SERVER_PORT);
-    if(g_Conn == NET_INVALID_CONN)
-    {
-        Log_WriteHex("[CONN] Fallo err=", g_NetLastError);
-        return FALSE;
-    }
-    Log_WriteHex("[CONN] Handle=", (u8)g_Conn);
-
-    // Esperar ESTABLISHED
-    timeout = 0;
-    while(timeout < 500)
-    {
-        Halt();
-        tcpState = Net_GetConnState(g_Conn);
-        if(tcpState == TCP_STATE_ESTABLISHED) break;
-        if(tcpState == 0xFF) { Log_Write("[CONN] Fallo TCP"); return FALSE; }
-        timeout++;
-    }
-    if(timeout >= 500) { Log_Write("[CONN] Timeout"); return FALSE; }
-    Log_Write("[CONN] ESTABLISHED");
-
-    Net_Wait50();
-
-    // Auth
-    {
-        u8 token[4];
-        u8 len;
-        token[0] = AUTH_TOKEN_0;
-        token[1] = AUTH_TOKEN_1;
-        token[2] = AUTH_TOKEN_2;
-        token[3] = AUTH_TOKEN_3;
-        g_SendBuf[0] = PROTO_MAGIC_0;
-        g_SendBuf[1] = PROTO_MAGIC_1;
-        g_SendBuf[2] = CMD_AUTH;
-        g_SendBuf[3] = 0;
-        g_SendBuf[4] = 0;
-        g_SendBuf[5] = 4;
-        g_SendBuf[6] = token[0];
-        g_SendBuf[7] = token[1];
-        g_SendBuf[8] = token[2];
-        g_SendBuf[9] = token[3];
-        Net_Send(g_Conn, g_SendBuf, 10);
-        Log_Write("[AUTH] Enviado");
-    }
-
-    // Esperar AUTH_OK
-    timeout = 0;
-    while(timeout < 250)
-    {
-        u16 avail;
-        Halt();
-        avail = Net_Available(g_Conn);
-        if(avail >= 6)
-        {
-            u8 hdr[6];
-            Net_Recv(g_Conn, hdr, 6);
-            if(hdr[2] == CMD_AUTH_OK) { Log_Write("[AUTH] OK"); break; }
-            if(hdr[2] == CMD_AUTH_FAIL) { Log_Write("[AUTH] FAIL"); return FALSE; }
-        }
-        timeout++;
-    }
-    if(timeout >= 250) { Log_Write("[AUTH] Timeout"); return FALSE; }
-
-    return TRUE;
-}
-
-//=============================================================================
-// RED: LOBBY + SALA
-//=============================================================================
-
-#define STATE_LOBBY_WAIT 0
-#define STATE_LOBBY      1
-#define STATE_WAITING    2  // Esperando segundo jugador
-#define STATE_PLAYING    3
-static u8 g_GameState = STATE_LOBBY_WAIT;
-
-#define LOBBY_MAX_ROOMS 10
-typedef struct { u8 roomId; u8 gameId; u8 players; } LobbyRoom;
-static LobbyRoom g_LobbyRooms[LOBBY_MAX_ROOMS];
-static u8 g_LobbyCount = 0;
-static u8 g_LobbyCursor = 0;
-static u8 g_KeyUp = 0, g_KeyDown = 0, g_KeyRet = 0, g_KeyC = 0, g_KeyR = 0, g_KeyEsc = 0;
-
-void Net_RequestRoomList(void)
-{
-    if(g_Conn == NET_INVALID_CONN) return;
-    g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
-    g_SendBuf[2] = CMD_ROOM_LIST; g_SendBuf[3] = 0; g_SendBuf[4] = 0; g_SendBuf[5] = 0;
-    Net_Send(g_Conn, g_SendBuf, 6);
-}
-
-void Net_CreateRoom(void)
-{
-    if(g_Conn == NET_INVALID_CONN) return;
-    g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
-    g_SendBuf[2] = CMD_ROOM_CREATE; g_SendBuf[3] = 0; g_SendBuf[4] = 0;
-    g_SendBuf[5] = 3;
-    g_SendBuf[6] = GAME_ID_DAMAS;
-    g_SendBuf[7] = 2;  // max 2 jugadores
-    g_SendBuf[8] = 0x01; // RELAY mode (turnos gestionados por cliente)
-    Net_Send(g_Conn, g_SendBuf, 9);
-}
-
-void Net_JoinRoom(u8 roomId)
-{
-    if(g_Conn == NET_INVALID_CONN) return;
-    g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
-    g_SendBuf[2] = CMD_ROOM_JOIN; g_SendBuf[3] = 0; g_SendBuf[4] = 0;
-    g_SendBuf[5] = 1; g_SendBuf[6] = roomId;
-    Net_Send(g_Conn, g_SendBuf, 7);
-}
+// El juego solo tiene un estado funcional: jugando. La conexión TCP, sala,
+// pid y mensajes de room ya los gestiona MSXon antes de lanzar damas.com.
+static u8 g_GameState = 0;   // valor inerte, no hay máquina de estados
+#define STATE_PLAYING 0
 
 // endTurn: 0 = multi-captura pendiente (no cambiar turno), 1 = fin de turno
 void Net_SendMove(u8 fromX, u8 fromY, u8 toX, u8 toY, u8 endTurn)
 {
-    if(g_Conn == NET_INVALID_CONN) return;
-    g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
-    g_SendBuf[2] = CMD_STATE_UPDATE; g_SendBuf[3] = g_RoomId; g_SendBuf[4] = g_MyPid;
-    g_SendBuf[5] = 8;
-    g_SendBuf[6] = fromX; g_SendBuf[7] = fromY;
-    g_SendBuf[8] = toX; g_SendBuf[9] = toY;
-    g_SendBuf[10] = endTurn; g_SendBuf[11] = 0; g_SendBuf[12] = 0; g_SendBuf[13] = 0;
-    Net_Send(g_Conn, g_SendBuf, 14);
+    u8 pl[8];
+    pl[0] = fromX; pl[1] = fromY;
+    pl[2] = toX;   pl[3] = toY;
+    pl[4] = endTurn; pl[5] = 0; pl[6] = 0; pl[7] = 0;
+    GameRT_Send(CMD_STATE_UPDATE, pl, 8);
 }
 
-void Net_SendPing(void)
+void Net_ProcessPacket(u8 cmd, u8 senderPid, u8* payload, u8 len)
 {
-    if(g_Conn == NET_INVALID_CONN) return;
-    g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
-    g_SendBuf[2] = CMD_PING; g_SendBuf[3] = g_RoomId; g_SendBuf[4] = g_MyPid;
-    g_SendBuf[5] = 0;
-    Net_Send(g_Conn, g_SendBuf, 6);
-}
-
-void Net_ProcessPacket(u8 cmd, u8* payload, u8 len)
-{
-    if(cmd == CMD_ROOM_LIST && len >= 1)
+    (void)senderPid;
+    if(cmd == CMD_PLAYER_LEFT)
     {
-        u8 count = payload[0];
-        u8 i;
-        g_LobbyCount = 0;
-        for(i = 0; i < count && i < LOBBY_MAX_ROOMS; i++)
-        {
-            u8 off = 1 + i * 3;
-            if(payload[off + 1] == GAME_ID_DAMAS)
-            {
-                g_LobbyRooms[g_LobbyCount].roomId = payload[off];
-                g_LobbyRooms[g_LobbyCount].gameId = payload[off + 1];
-                g_LobbyRooms[g_LobbyCount].players = payload[off + 2];
-                g_LobbyCount++;
-            }
-        }
-        g_LobbyCursor = 0;
-        g_GameState = STATE_LOBBY;
-        Lobby_Draw();
-    }
-    else if(cmd == CMD_ROOM_INFO && len >= 4)
-    {
-        g_RoomId = payload[0];
-        g_MyPid = payload[3];
-        Log_WriteHex("[ROOM] Room=", g_RoomId);
-        Log_WriteHex("[ROOM] PID=", g_MyPid);
-        Log_WriteHex("[ROOM] Players=", payload[2]);
-        // P1 = blancas, P2 = negras
-        g_MyColor = (g_MyPid == 1) ? PIECE_WHITE : PIECE_BLACK;
-
-        if(payload[2] >= 2)
-        {
-            // Dos jugadores: empieza partida
-            g_GameState = STATE_PLAYING;
-            g_BoardDirty = TRUE;
-        }
-        else
-        {
-            // Solo yo: dibujar tablero y esperar al segundo
-            Board_Draw();
-            Buf_PutText(2, 0, "ESPERANDO RIVAL");
-            Buf_PutText(2, 1, (g_MyColor == PIECE_WHITE) ? "BLANCAS" : "NEGRAS");
-            Buf_PutText(20, 0, "SALA:");
-            Buf_PutNum(26, 0, g_RoomId);
-            g_FullFlush = TRUE;
-            g_GameState = STATE_WAITING;
-        }
-    }
-    else if(cmd == CMD_PLAYER_JOINED)
-    {
-        if(g_GameState == STATE_WAITING)
-        {
-            g_GameState = STATE_PLAYING;
-            g_BoardDirty = TRUE;
-        }
-    }
-    else if(cmd == CMD_PLAYER_LEFT)
-    {
-        if(g_GameState == STATE_PLAYING || g_GameState == STATE_WAITING)
-        {
-            g_GameResult = GAME_RESULT_DISC;
-        }
+        g_GameResult = GAME_RESULT_DISC;
     }
     else if(cmd == CMD_STATE_UPDATE && len >= 4)
     {
@@ -1209,9 +973,12 @@ void Net_ProcessPacket(u8 cmd, u8* payload, u8 len)
         if(fromX != toX || fromY != toY)
         {
             u8 endTurn = payload[4];
+            u8 piece = g_Board[fromY][fromX];
+            u8 isWhite = (piece == PIECE_WHITE || piece == PIECE_WHITE_KING);
+            u8 wasCapture = 0;
             // Ejecutar movimiento del oponente sin cambiar turno
             // (Move_Execute cambia turno internamente, pero debemos respetar endTurn)
-            g_Board[toY][toX] = g_Board[fromY][fromX];
+            g_Board[toY][toX] = piece;
             g_Board[fromY][fromX] = PIECE_NONE;
             // Quitar pieza capturada si hay
             {
@@ -1228,114 +995,42 @@ void Net_ProcessPacket(u8 cmd, u8* payload, u8 len)
                     if(g_Board[cy][cx] != PIECE_NONE)
                     {
                         g_Board[cy][cx] = PIECE_NONE;
+                        wasCapture = 1;
                         break;
                     }
                 }
             }
+            // Log: captura, coronacion o movimiento simple
+            if(wasCapture) Log_Add(isWhite ? "B COME N" : "N COME B");
             // Promocion
-            if(g_Board[toY][toX] == PIECE_WHITE && toY == 0)
+            if(g_Board[toY][toX] == PIECE_WHITE && toY == 0) {
                 g_Board[toY][toX] = PIECE_WHITE_KING;
-            if(g_Board[toY][toX] == PIECE_BLACK && toY == BOARD_SIZE - 1)
+                Log_Add("B CORONA");
+            }
+            if(g_Board[toY][toX] == PIECE_BLACK && toY == BOARD_SIZE - 1) {
                 g_Board[toY][toX] = PIECE_BLACK_KING;
+                Log_Add("N CORONA");
+            }
             // Solo cambiar turno si endTurn == 1
-            if(endTurn)
+            if(endTurn) {
+                if(!wasCapture) Log_Add(isWhite ? "MUEVE B" : "MUEVE N");
                 g_Turn = (g_Turn == PIECE_WHITE) ? PIECE_BLACK : PIECE_WHITE;
+            }
+            HUD_DrawTurn();
+            HUD_DrawLog();
             g_BoardDirty = TRUE;
             CheckGameOver();
         }
     }
 }
 
-void Net_Poll(void)
+// Tick por iteración del loop: procesa paquetes y envia ping periódico.
+static u16 g_PingTimerCnt;
+static void Net_Tick(void)
 {
-    u16 avail;
-    u8 hdr[6];
-    u8 payload[200];
-    u8 maxPkts;
-
-    if(g_Conn == NET_INVALID_CONN) return;
-
-    maxPkts = 4;
-    while(maxPkts--)
-    {
-        avail = Net_Available(g_Conn);
-        if(avail < 6) break;
-        Net_Recv(g_Conn, hdr, 6);
-        if(hdr[0] != PROTO_MAGIC_0 || hdr[1] != PROTO_MAGIC_1) break;
-        if(hdr[5] > 0)
-        {
-            avail = Net_Available(g_Conn);
-            if(avail < hdr[5]) break;
-            Net_Recv(g_Conn, payload, hdr[5]);
-        }
-        Net_ProcessPacket(hdr[2], payload, hdr[5]);
-    }
-
-    g_PingTimer++;
-    if(g_PingTimer >= PING_INTERVAL) { g_PingTimer = 0; Net_SendPing(); }
-}
-
-//=============================================================================
-// LOBBY
-//=============================================================================
-
-void Lobby_Draw(void)
-{
-    u8 i;
-    u16 idx;
-
-    for(idx = 0; idx < 768; idx++) g_NameBuf[idx] = TILE_SPC;
-    g_FullFlush = TRUE;
-
-    Buf_PutText(10, 1, "DAMAS ONLINE");
-    Buf_PutText(6, 3, "SALAS DISPONIBLES");
-
-    if(g_LobbyCount == 0)
-    {
-        Buf_PutText(6, 8, "NO HAY SALAS");
-        Buf_PutText(6, 10, "PULSA C PARA CREAR");
-    }
-    else
-    {
-        Buf_PutText(8, 5, "SALA  JUGADORES");
-        for(i = 0; i < g_LobbyCount; i++)
-        {
-            u8 row = 7 + i * 2;
-            if(row > 20) break;
-
-            if(i == g_LobbyCursor)
-            {
-                u16 cidx = (u16)row * 32 + 6;
-                g_NameBuf[cidx] = TILE_CURSOR_T;
-            }
-
-            Buf_PutNum(8, row, g_LobbyRooms[i].roomId);
-            Buf_PutNum(14, row, g_LobbyRooms[i].players);
-            Buf_PutText(16, row, "/2");
-        }
-    }
-
-    Buf_PutText(4, 22, "C CREAR  ENTER UNIR");
-    Buf_PutText(4, 23, "R REFRESCAR  ESC SALIR");
-}
-
-void Lobby_ProcessInput(void)
-{
-    if(g_KeyUp) { g_KeyUp = 0; if(g_LobbyCursor > 0) { g_LobbyCursor--; Lobby_Draw(); } }
-    if(g_KeyDown) { g_KeyDown = 0; if(g_LobbyCount > 0 && g_LobbyCursor < g_LobbyCount-1) { g_LobbyCursor++; Lobby_Draw(); } }
-    if(g_KeyRet) {
-        g_KeyRet = 0;
-        if(g_LobbyCount > 0) {
-            Net_JoinRoom(g_LobbyRooms[g_LobbyCursor].roomId);
-            g_GameState = STATE_LOBBY_WAIT;
-        }
-    }
-    if(g_KeyC) {
-        g_KeyC = 0;
-        Net_CreateRoom();
-        g_GameState = STATE_LOBBY_WAIT;
-    }
-    if(g_KeyR) { g_KeyR = 0; g_GameState = STATE_LOBBY_WAIT; Net_RequestRoomList(); }
+    GameRT_Poll(Net_ProcessPacket, 4);
+    g_PingTimerCnt++;
+    if(g_PingTimerCnt >= PING_INTERVAL) { g_PingTimerCnt = 0; GameRT_SendPing(); }
 }
 
 //=============================================================================
@@ -1345,21 +1040,42 @@ void Lobby_ProcessInput(void)
 void main(void)
 {
     u8 i;
-    bool online;
 
-    // Check if launched from LOBBY.COM
-    if(LobbyClient_Load()) {
-        g_Conn = (NetConn)(int)g_LobbyData.conn;
-        g_MyPid = g_LobbyData.pid;
-        g_RoomId = g_LobbyData.roomId;
-        g_MyColor = (g_MyPid == 1) ? PIECE_WHITE : PIECE_BLACK;
-        online = TRUE;
-        Net_Init();
-    } else {
-        // Direct launch: full diag + connect
-        Diag_ShowNetInfo();
-        online = Net_ConnectToServer();
+    // Inicializar BSS estatica (SDCC para MSX-DOS no garantiza zero-init).
+    // Si g_GameResult queda con basura, el game loop entra al bloque de
+    // game-over en la primera iteracion → "[EXIT] Fin" inmediato.
+    g_LogCount = 0;
+    g_PingTimerCnt = 0;
+    g_GameResult = GAME_RESULT_NONE;
+    g_CursorX = 0;
+    g_CursorY = 0;
+    g_Selected = 0;
+    g_MustCapture = 0;
+    g_MoveDelay = 0;
+    g_BoardDirty = TRUE;
+    g_FullFlush = TRUE;
+    g_Turn = PIECE_WHITE;
+
+    Log_Init();
+    Log_Write("[INIT] Damas arrancando");
+
+    // Requiere MSXon como punto de entrada. Lee LOBBY.DAT y popula g_Game.
+    if(!GameRT_Init())
+    {
+        DOS_StringOutput("Damas debe lanzarse desde MSXon.\r\n$");
+        DOS_StringOutput("Tipea MSXON en el prompt.\r\n$");
+        Log_Write("[INIT] Sin LOBBY.DAT");
+        Log_Close();
+        Bios_Exit(0);
+        return;
     }
+    // Compatibilidad con el resto del codigo del juego
+    g_Conn   = g_Game.conn;
+    g_MyPid  = g_Game.pid;
+    g_RoomId = g_Game.roomId;
+    g_MyColor = (g_MyPid == 1) ? PIECE_WHITE : PIECE_BLACK;
+    Log_WriteHex("[ROOM] Room=", g_RoomId);
+    Log_WriteHex("[ROOM] PID=",  g_MyPid);
 
     // Screen 4
     VDP_SetMode(VDP_MODE_SCREEN4);
@@ -1374,24 +1090,9 @@ void main(void)
 
     VDP_LoadTileset();
     Board_Init();
-
-    if(g_FromLobby)
-    {
-        // From LOBBY.COM: go straight to playing
-        g_GameState = STATE_PLAYING;
-        g_BoardDirty = TRUE;
-        Board_Draw();
-    }
-    else if(online)
-    {
-        g_GameState = STATE_LOBBY_WAIT;
-        Net_RequestRoomList();
-    }
-    else
-    {
-        g_GameState = STATE_PLAYING;
-        Board_Draw();
-    }
+    g_GameState = STATE_PLAYING;
+    g_BoardDirty = TRUE;
+    Board_Draw();
 
     // Game loop
     while(1)
@@ -1419,133 +1120,83 @@ void main(void)
         Keyboard_Update();
         *((u16*)0xF3F8) = *((u16*)0xF3FA);
 
-        // Capturar teclas con anti-rebote (lobby)
-        if(g_GameState == STATE_LOBBY || g_GameState == STATE_LOBBY_WAIT || g_GameState == STATE_WAITING)
+        if(Keyboard_IsKeyPressed(KEY_ESC)) break;
+
+        Game_ProcessInput();
+        Net_Tick();
+
+        if(g_BoardDirty)
+            Board_Draw();
+
+        Pieces_Draw();
+        Cursor_Draw();
+
+        // Fin de partida (victoria/derrota/desconexion del rival)
+        if(g_GameResult != GAME_RESULT_NONE)
         {
-            if(g_MoveDelay > 0) { g_MoveDelay--; }
+            u16 idx;
+            u8 w, replay;
+
+            for(idx = 0; idx < 768; idx++) g_NameBuf[idx] = TILE_SPC;
+            if(g_GameResult == GAME_RESULT_WIN) {
+                Buf_PutText(8, 10, "GANA");
+                Buf_PutText(13, 10, GameRT_GetNick(g_Game.pid));
+            }
+            else if(g_GameResult == GAME_RESULT_LOSE) {
+                // Ganador es el rival: PID 1 si yo soy 2, PID 2 si yo soy 1
+                u8 winner = (g_Game.pid == 1) ? 2 : 1;
+                Buf_PutText(8, 10, "GANA");
+                Buf_PutText(13, 10, GameRT_GetNick(winner));
+            }
             else
-            {
-                if(Keyboard_IsKeyPressed(KEY_UP))   { g_KeyUp = 1; g_MoveDelay = 8; }
-                if(Keyboard_IsKeyPressed(KEY_DOWN)) { g_KeyDown = 1; g_MoveDelay = 8; }
-                if(Keyboard_IsKeyPressed(KEY_RET))  { g_KeyRet = 1; g_MoveDelay = 15; }
-                if(Keyboard_IsKeyPressed(KEY_C))    { g_KeyC = 1; g_MoveDelay = 15; }
-                if(Keyboard_IsKeyPressed(KEY_R))    { g_KeyR = 1; g_MoveDelay = 15; }
-                if(Keyboard_IsKeyPressed(KEY_ESC))  { g_KeyEsc = 1; }
+                Buf_PutText(5, 10, "RIVAL DESCONECTADO");
+            Buf_PutText(4, 14, "ENTER NUEVA");
+            Buf_PutText(4, 16, "ESC SALIR");
+            g_FullFlush = TRUE;
+
+            for(w = 0; w < 32; w++) VDP_SetSpriteExUniColor(w, 0, 209, 0, 0);
+            // Esperar input del usuario: ENTER = nueva partida, ESC = volver a MSXon.
+            // Debounce de inicio para que tecla mantenida no dispare instantaneo.
+            for(w = 0; w < 30; w++) Halt();
+            replay = 0xFF; // sin decidir
+            while(replay == 0xFF) {
+                Halt();
+                if(g_FullFlush) { VDP_WriteVRAM(g_NameBuf, 0x1800, 0, 768); g_FullFlush = FALSE; }
+                Keyboard_Update();
+                *((u16*)0xF3F8) = *((u16*)0xF3FA);
+                if(Keyboard_IsKeyPressed(KEY_RET)) replay = 1;
+                else if(Keyboard_IsKeyPressed(KEY_ESC)) replay = 0;
+                // Drenar paquetes pero ignorar (sala ya cerrada localmente).
+                GameRT_Poll(Net_ProcessPacket, 4);
             }
-        }
-        else
-        {
-            if(Keyboard_IsKeyPressed(KEY_ESC)) g_KeyEsc = 1;
-        }
 
-        if(g_KeyEsc) break;
+            // Avisar al server en ambos casos (libera la sala / resetea ghost).
+            { u8 empty = 0; GameRT_Send(CMD_GAME_END, &empty, 0); }
 
-        if(g_GameState == STATE_LOBBY_WAIT)
-        {
-            Net_Poll();
-        }
-        else if(g_GameState == STATE_LOBBY)
-        {
-            Lobby_ProcessInput();
-            // Poll ligero
-            if(online)
-            {
-                u16 avail = Net_Available(g_Conn);
-                if(avail >= 6)
-                {
-                    u8 hdr[6];
-                    u8 pl[255];
-                    Net_Recv(g_Conn, hdr, 6);
-                    if(hdr[0] == PROTO_MAGIC_0 && hdr[1] == PROTO_MAGIC_1 && hdr[5] > 0)
-                    {
-                        while(Net_Available(g_Conn) < hdr[5]) Halt();
-                        Net_Recv(g_Conn, pl, hdr[5]);
-                    }
-                    if(hdr[0] == PROTO_MAGIC_0 && hdr[1] == PROTO_MAGIC_1)
-                        Net_ProcessPacket(hdr[2], pl, hdr[5]);
-                }
-            }
-        }
-        else if(g_GameState == STATE_WAITING)
-        {
-            // Esperando segundo jugador — mostrar fichas
-            Pieces_Draw();
-            Net_Poll();
-        }
-        else if(g_GameState == STATE_PLAYING)
-        {
-            Game_ProcessInput();
+            if(replay == 0) break; // ESC: vuelve a MSXon
 
-            if(online)
-                Net_Poll();
-
-            if(g_BoardDirty)
-                Board_Draw();
-
-            Pieces_Draw();
-            Cursor_Draw();
-
-            // Comprobar fin de partida
-            if(g_GameResult != GAME_RESULT_NONE)
-            {
-                u16 idx;
-                u8 w;
-
-                // Mostrar resultado sobre el tablero
-                for(idx = 0; idx < 768; idx++) g_NameBuf[idx] = TILE_SPC;
-                if(g_GameResult == GAME_RESULT_WIN)
-                    Buf_PutText(8, 10, "HAS GANADO");
-                else if(g_GameResult == GAME_RESULT_LOSE)
-                    Buf_PutText(8, 10, "HAS PERDIDO");
-                else
-                    Buf_PutText(5, 10, "RIVAL DESCONECTADO");
-
-                Buf_PutText(5, 14, "PULSA ESPACIO");
-                g_FullFlush = TRUE;
-
-                // Esperar tecla
-                for(w = 0; w < 32; w++) VDP_SetSpriteExUniColor(w, 0, 209, 0, 0);
-                while(!Keyboard_IsKeyPressed(KEY_SPACE) && !Keyboard_IsKeyPressed(KEY_RET))
-                {
-                    Halt();
-                    Keyboard_Update();
-                    *((u16*)0xF3F8) = *((u16*)0xF3FA);
-                    if(g_FullFlush) { VDP_WriteVRAM(g_NameBuf, 0x1800, 0, 768); g_FullFlush = FALSE; }
-                }
-
-                // Salir de la sala
-                if(g_Conn != NET_INVALID_CONN)
-                {
-                    g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
-                    g_SendBuf[2] = CMD_ROOM_LEAVE; g_SendBuf[3] = g_RoomId;
-                    g_SendBuf[4] = g_MyPid; g_SendBuf[5] = 0;
-                    Net_Send(g_Conn, g_SendBuf, 6);
-                }
-                g_RoomId = 0;
-                g_MyPid = 0;
-                g_MyColor = 0;
-
-                // Reiniciar para volver al lobby
-                g_GameResult = GAME_RESULT_NONE;
-                g_MustCapture = 0;
-                g_Selected = 0;
-                g_Turn = PIECE_WHITE;
-                Board_Init();
-                g_GameState = STATE_LOBBY_WAIT;
-                Net_RequestRoomList();
-            }
+            // ENTER: reset local y seguir jugando.
+            Board_Init();
+            g_Turn = PIECE_WHITE;
+            g_GameResult = GAME_RESULT_NONE;
+            g_LogCount = 0;
+            g_Selected = 0;
+            g_MustCapture = 0;
+            g_CursorX = 0;
+            g_CursorY = 0;
+            g_BoardDirty = TRUE;
+            Board_Draw();
+            continue;
         }
     }
 
-    if(g_Conn != NET_INVALID_CONN)
-    {
-        Net_Close(g_Conn);
-        g_Conn = NET_INVALID_CONN;
-    }
     Log_Write("[EXIT] Fin");
     Log_Close();
 
     for(i = 0; i < 32; i++)
         VDP_SetSpriteExUniColor(i, 0, 209, 0, 0);
-    Bios_Exit(0);
+
+    // Vuelve al lobby MSXon: cierra TCP, stuff "MSXON\r" al keyboard buffer,
+    // Bios_Exit. El shell de MSX-DOS relanza MSXON.COM automáticamente.
+    GameRT_ExitToLobby();
 }

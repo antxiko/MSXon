@@ -28,9 +28,10 @@
 #define CMD_LOGIN_FAIL      0x15    // S->C [reason] 1=bad_creds 2=not_found 3=banned 4=rate 5=pending_setup
 #define CMD_REGISTER        0x16    // C->S [ULEN][user][NLEN][nick]
 #define CMD_REG_PENDING     0x17    // S->C [TLEN][token]  (token 8 chars hex, ttl 10min)
-#define CMD_REG_FAIL        0x18    // S->C [reason] 1=user_exists 2=invalid_chars 3=disabled
+#define CMD_REG_FAIL        0x18    // S->C [reason] 1=user_exists 2=invalid_chars 3=disabled 4=pending_already 5=not_found (solo recover)
 #define CMD_LOGOUT          0x19    // C->S
 #define CMD_SESSION_RESUME  0x1A    // C->S [session_id 4B] (lo usan los juegos al arrancar)
+#define CMD_RECOVER_REQ     0x1B    // C->S [ULEN][user] — reset password (server responde REG_PENDING o REG_FAIL)
 // Roles (byte de respuesta de LOGIN_OK)
 #define ROLE_USER           0x01
 #define ROLE_ADMIN          0x02
