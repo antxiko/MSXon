@@ -95,6 +95,7 @@ static u8      g_NumGames = 0;
 #define ST_WAITING    10
 #define ST_LAUNCHING  11
 #define ST_CHAT       12
+#define ST_RECOVER    13   // formulario "recuperar contrasena" (pide solo username)
 
 static u8 g_State;
 static u8 g_SelGame;
@@ -515,6 +516,37 @@ static u8 NetRegister(const c8* user, const c8* nick) {
     return 0xFF;
 }
 
+// Recuperar password: envia [ULEN][user]. Responde como REGISTER: CMD_REG_PENDING
+// con token (rellena g_RegToken) o CMD_REG_FAIL con razon.
+// Retorno: 0=OK, 1..5=reason FAIL, 0xFF=red error.
+static u8 NetRecover(const c8* user) {
+    u8 ulen = StrLen(user);
+    if (ulen == 0) return 0xFF;
+
+    g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
+    g_SendBuf[2] = CMD_RECOVER_REQ; g_SendBuf[3] = 0;
+    g_SendBuf[4] = 0; g_SendBuf[5] = 1 + ulen;
+    u8 idx = 6;
+    g_SendBuf[idx++] = ulen;
+    for (u8 i = 0; i < ulen; i++) g_SendBuf[idx++] = user[i];
+    Net_Send(g_Conn, g_SendBuf, idx);
+
+    if (!NetRecvPacket(g_RecvHdr, g_RecvPl, 250)) return 0xFF;
+
+    if (g_RecvHdr[2] == CMD_REG_PENDING) {
+        if (g_RecvHdr[5] < 1) return 0xFF;
+        u8 tlen = g_RecvPl[0];
+        if (tlen > 8) tlen = 8;
+        for (u8 i = 0; i < tlen; i++) g_RegToken[i] = g_RecvPl[1 + i];
+        g_RegToken[tlen] = 0;
+        return 0;
+    }
+    if (g_RecvHdr[2] == CMD_REG_FAIL) {
+        if (g_RecvHdr[5] >= 1) return g_RecvPl[0];
+    }
+    return 0xFF;
+}
+
 // Pide CMD_GAME_LIST y rellena g_Games[]/g_GameNames/g_GameComs/g_GameFlags.
 // SESSION_RESUME: usa el session_id de g_SessionId. Si el server lo acepta,
 // rellena g_Role, g_Nick, g_SessionId (igual que LOGIN_OK).
@@ -552,59 +584,134 @@ static u8 NetSessionResume(void) {
 }
 
 // ── SESSION.DAT persistente ────────────────────────────────────────
-// Magic 0xBE + session_id 4B + role 1B + nickLen 1B + nick 16B + 1B reservado
-#define SESSION_DAT_MAGIC   0xBE
-#define SESSION_DAT_FILE    "SESSION.DAT"
-#define SESSION_DAT_SIZE    24
+// V1 (magic 0xBE, 24B): session_id 4B + role 1B + nickLen 1B + nick 16B + 1 res
+// V2 (magic 0xBF, 60B): V1 + ulen 1B + user 17B + plen 1B + pass 17B
+//   V2 se usa cuando el usuario marca "RECORDAR?" en el LOGIN — permite auto-
+//   login persistente mas alla del TTL del session_id (que en el server es 5
+//   min). Si en el web admin el usuario cambia password, el LOGIN con las
+//   credenciales guardadas dara LOGIN_FAIL y el cliente borra SESSION.DAT.
+#define SESSION_DAT_MAGIC_V1  0xBE
+#define SESSION_DAT_MAGIC_V2  0xBF
+#define SESSION_DAT_FILE      "SESSION.DAT"
+#define SESSION_DAT_SIZE_V1   24
+#define SESSION_DAT_SIZE_V2   60
 
-static void WriteSessionDat(void) {
-    u8 buf[SESSION_DAT_SIZE];
+// Credenciales rescatadas de SESSION.DAT V2 (vacias si fue V1 o no existia)
+static c8   g_SavedUser[MAX_INPUT + 1];
+static c8   g_SavedPass[MAX_INPUT + 1];
+static bool g_HasSavedCreds;
+
+// Si remember_user/pass son NULL o vacios → escribe V1 (sin creds).
+// Si tienen contenido → escribe V2 (auto-login persistente).
+static void WriteSessionDat(const c8* remember_user, const c8* remember_pass) {
+    u8 buf[SESSION_DAT_SIZE_V2];
     u8 i;
-    buf[0] = SESSION_DAT_MAGIC;
+    bool v2 = (remember_user && remember_user[0] && remember_pass && remember_pass[0]);
+    u8 sz = v2 ? SESSION_DAT_SIZE_V2 : SESSION_DAT_SIZE_V1;
+    buf[0] = v2 ? SESSION_DAT_MAGIC_V2 : SESSION_DAT_MAGIC_V1;
     buf[1] = g_SessionId[0]; buf[2] = g_SessionId[1];
     buf[3] = g_SessionId[2]; buf[4] = g_SessionId[3];
     buf[5] = g_Role;
     u8 nlen = StrLen(g_Nick); if (nlen > MAX_INPUT) nlen = MAX_INPUT;
     buf[6] = nlen;
     for (i = 0; i < nlen; i++) buf[7 + i] = g_Nick[i];
-    for (i = 7 + nlen; i < SESSION_DAT_SIZE; i++) buf[i] = 0;
+    for (i = 7 + nlen; i < SESSION_DAT_SIZE_V1; i++) buf[i] = 0;
+    if (v2) {
+        u8 ulen = StrLen(remember_user); if (ulen > MAX_INPUT) ulen = MAX_INPUT;
+        buf[24] = ulen;
+        for (i = 0; i < ulen; i++) buf[25 + i] = remember_user[i];
+        for (i = 25 + ulen; i < 42; i++) buf[i] = 0;
+        u8 plen = StrLen(remember_pass); if (plen > MAX_INPUT) plen = MAX_INPUT;
+        buf[42] = plen;
+        for (i = 0; i < plen; i++) buf[43 + i] = remember_pass[i];
+        for (i = 43 + plen; i < SESSION_DAT_SIZE_V2; i++) buf[i] = 0;
+    }
     u8 fh = DOS_CreateHandle(SESSION_DAT_FILE, O_WRONLY, 0x00);
     if (fh < 0xFE) {
-        DOS_WriteHandle(fh, buf, SESSION_DAT_SIZE);
+        DOS_WriteHandle(fh, buf, sz);
         DOS_CloseHandle(fh);
     }
 }
 
-// Lee SESSION.DAT. Si magic OK, popula g_SessionId, g_Role, g_Nick. Devuelve TRUE.
+// Lee SESSION.DAT. Si magic OK, popula g_SessionId, g_Role, g_Nick. Devuelve
+// TRUE. Si es V2 ademas popula g_SavedUser/g_SavedPass y pone g_HasSavedCreds.
 static bool ReadSessionDat(void) {
-    u8 buf[SESSION_DAT_SIZE];
+    u8 buf[SESSION_DAT_SIZE_V2];
+    g_HasSavedCreds = FALSE;
+    g_SavedUser[0] = 0;
+    g_SavedPass[0] = 0;
     u8 fh = DOS_OpenHandle(SESSION_DAT_FILE, O_RDONLY);
     if (fh >= 0xFE) return FALSE;
-    DOS_ReadHandle(fh, buf, SESSION_DAT_SIZE);
+    DOS_ReadHandle(fh, buf, SESSION_DAT_SIZE_V2);
     DOS_CloseHandle(fh);
-    if (buf[0] != SESSION_DAT_MAGIC) return FALSE;
+    if (buf[0] != SESSION_DAT_MAGIC_V1 && buf[0] != SESSION_DAT_MAGIC_V2) return FALSE;
     g_SessionId[0] = buf[1]; g_SessionId[1] = buf[2];
     g_SessionId[2] = buf[3]; g_SessionId[3] = buf[4];
     g_Role = buf[5];
     u8 nlen = buf[6]; if (nlen > MAX_INPUT) nlen = MAX_INPUT;
     for (u8 i = 0; i < nlen; i++) g_Nick[i] = buf[7 + i];
     g_Nick[nlen] = 0;
+    if (buf[0] == SESSION_DAT_MAGIC_V2) {
+        u8 ulen = buf[24]; if (ulen > MAX_INPUT) ulen = MAX_INPUT;
+        for (u8 i = 0; i < ulen; i++) g_SavedUser[i] = buf[25 + i];
+        g_SavedUser[ulen] = 0;
+        u8 plen = buf[42]; if (plen > MAX_INPUT) plen = MAX_INPUT;
+        for (u8 i = 0; i < plen; i++) g_SavedPass[i] = buf[43 + i];
+        g_SavedPass[plen] = 0;
+        g_HasSavedCreds = (ulen > 0 && plen > 0);
+    }
     return TRUE;
 }
 
 static void DeleteSessionDat(void) {
     DOS_Delete(SESSION_DAT_FILE);
+    g_HasSavedCreds = FALSE;
+    g_SavedUser[0] = 0;
+    g_SavedPass[0] = 0;
 }
 
-// Intenta restaurar sesión desde SESSION.DAT.
-// Si OK: conecta, AUTH legacy, SESSION_RESUME, NetFetchGameList → devuelve TRUE
-// (caller debe ir directo a ST_MENU). Si no, borra SESSION.DAT y devuelve FALSE.
+// Intenta restaurar sesion desde SESSION.DAT.
+//
+// Si OK: conecta, AUTH legacy, SESSION_RESUME (o LOGIN con creds guardadas),
+// NetFetchGameList → devuelve TRUE (caller debe ir directo a ST_MENU).
+//
+// Logica:
+//  1. SESSION_RESUME con el session_id guardado (rapido si <5min del ultimo
+//     login).
+//  2. Si SESSION_RESUME falla y SESSION.DAT es V2 (con creds), intentar LOGIN
+//     normal con user+password guardados. Si OK, re-escribir SESSION.DAT con
+//     el nuevo session_id manteniendo las creds. Si LOGIN tambien falla (p.ej.
+//     el usuario cambio password en el web), borrar SESSION.DAT y caer al
+//     flujo manual.
+//  3. Si SESSION.DAT es V1 (sin creds) y SESSION_RESUME falla, borrar y caer
+//     al flujo manual.
 static bool TryResumeSession(void) {
-    if (!ReadSessionDat())        return FALSE;
-    if (!NetConnectAndAuth())    { DeleteSessionDat(); return FALSE; }
-    if (NetSessionResume() != 0) { DeleteSessionDat(); return FALSE; }
-    if (!NetFetchGameList())     { DeleteSessionDat(); return FALSE; }
-    return TRUE;
+    if (!ReadSessionDat())     return FALSE;
+    if (!NetConnectAndAuth()) { DeleteSessionDat(); return FALSE; }
+    if (NetSessionResume() == 0) {
+        if (!NetFetchGameList()) { DeleteSessionDat(); return FALSE; }
+        return TRUE;
+    }
+    // SESSION_RESUME fallo. Fallback a LOGIN si tenemos creds (V2).
+    if (g_HasSavedCreds) {
+        // Copiamos a g_BufUser/g_BufPass porque WriteSessionDat los va a leer
+        // de estas variables. NetLogin tambien las usa indirectamente al
+        // poblar g_Role/g_Nick/g_SessionId.
+        u8 i;
+        for (i = 0; g_SavedUser[i] && i < MAX_INPUT; i++) g_BufUser[i] = g_SavedUser[i];
+        g_BufUser[i] = 0;
+        for (i = 0; g_SavedPass[i] && i < MAX_INPUT; i++) g_BufPass[i] = g_SavedPass[i];
+        g_BufPass[i] = 0;
+        u8 r = NetLogin(g_SavedUser, g_SavedPass);
+        if (r == 0) {
+            // LOGIN_OK: persistir el NUEVO session_id pero manteniendo creds.
+            WriteSessionDat(g_SavedUser, g_SavedPass);
+            if (!NetFetchGameList()) { DeleteSessionDat(); return FALSE; }
+            return TRUE;
+        }
+    }
+    DeleteSessionDat();
+    return FALSE;
 }
 
 // Payload server: [N][gameId, flags, max, proto, comLen, com, nameLen, name] x N
@@ -1453,8 +1560,36 @@ static void RunIntro(void)
     g_State = ST_CHOICE;
 }
 
-static void RunChoice(void)
-{
+// Indices de las opciones del menu CHOICE
+#define CHOICE_LOGIN    0
+#define CHOICE_REGISTER 1
+#define CHOICE_RECOVER  2
+#define CHOICE_AUTO     3
+#define CHOICE_COUNT    4
+
+// Dibuja una linea del menu en posicion fija. selected=TRUE → resalta con ">".
+static void DrawChoiceLine(u8 idx, bool selected) {
+    u16 y = 80 + idx * 16;
+    Print_SetColor(0x11, 0x33);
+    Print_SetPosition(40, y);
+    Print_DrawChar(selected ? '>' : ' ');
+    Print_DrawChar(' ');
+    Print_SetColor(selected ? 0x22 : 0x11, 0x33);
+    switch (idx) {
+        case CHOICE_LOGIN:    Print_DrawText("LOGIN                "); break;
+        case CHOICE_REGISTER: Print_DrawText("REGISTRAR            "); break;
+        case CHOICE_RECOVER:  Print_DrawText("RECUPERAR CONTRASENA "); break;
+        case CHOICE_AUTO:
+            Print_DrawText("LOGIN AUTOMATICO ");
+            Print_DrawChar('[');
+            Print_DrawChar(g_HasSavedCreds ? 'X' : ' ');
+            Print_DrawChar(']');
+            Print_DrawText("  ");
+            break;
+    }
+}
+
+static void DrawChoiceMenu(u8 sel) {
     VDP_SetPaletteEntry(IDX_BLACK, PAL_BLACK);
     VDP_SetPaletteEntry(IDX_WHITE, PAL_GREEN);
     VDP_SetPaletteEntry(IDX_BLUE,  PAL_DIMGREEN);
@@ -1471,22 +1606,131 @@ static void RunChoice(void)
     Print_SetPosition(8, 56);
     Print_DrawText("------------------------------");
 
-    Print_SetColor(0x22, 0x33);
-    Print_SetPosition(56, 80);
-    Print_DrawText("[ 1 ]   LOGIN");
-    Print_SetPosition(56, 96);
-    Print_DrawText("[ 2 ]   REGISTRARSE");
+    {
+        u8 i;
+        for (i = 0; i < CHOICE_COUNT; i++) DrawChoiceLine(i, i == sel);
+    }
 
     Print_SetColor(0x11, 0x33);
-    Print_SetPosition(64, 168);
-    Print_DrawText("[ESC] para salir");
+    Print_SetPosition(8, 168);
+    Print_DrawText("[Cursores] mover  [ENTER] elegir  [ESC] salir");
+}
 
+static void RunChoice(void)
+{
+    // Refrescar g_HasSavedCreds (puede haber cambiado si volvimos del flujo
+    // RECOVER, por ejemplo). ReadSessionDat es inofensivo si no existe el file.
+    ReadSessionDat();
+    // Si hay creds (SESSION.DAT V2), arranca countdown 2s para auto-login.
+    bool autoCountdownActive = g_HasSavedCreds;
+    u8   autoFrames = autoCountdownActive ? 120 : 0;  // 120 frames @ 60Hz ~ 2s
+    u8   sel = CHOICE_LOGIN;
+    u8   prevSel = 0xFF;
+
+    DrawChoiceMenu(sel);
+
+    u8 keyDly = 8;
+    bool prevAnyKey = TRUE;  // asumimos que algo se puede estar pulsando al entrar
     while (1)
     {
-        if (Keyboard_IsKeyPressed(KEY_1)) { g_State = ST_LOGIN;    return; }
-        if (Keyboard_IsKeyPressed(KEY_2)) { g_State = ST_REGISTER; return; }
-        if (Keyboard_IsKeyPressed(KEY_ESC)) { Bios_Exit(0); }
         Halt();
+        *((u16*)0xF3F8) = *((u16*)0xF3FA);
+
+        bool anyKey = Keyboard_IsKeyPressed(KEY_UP)    ||
+                      Keyboard_IsKeyPressed(KEY_DOWN)  ||
+                      Keyboard_IsKeyPressed(KEY_RET)   ||
+                      Keyboard_IsKeyPressed(KEY_ESC)   ||
+                      Keyboard_IsKeyPressed(KEY_SPACE);
+
+        // Countdown auto-login: se cancela en cuanto se detecte CUALQUIER tecla.
+        if (autoCountdownActive) {
+            if (anyKey) {
+                autoCountdownActive = FALSE;
+                // Limpiar la linea del countdown
+                Print_SetColor(0x11, 0x33);
+                Print_SetPosition(8, 184);
+                { u8 i; for (i = 0; i < 42; i++) Print_DrawChar(' '); }
+            } else if (autoFrames > 0) {
+                autoFrames--;
+                if (autoFrames == 0) {
+                    // Disparar auto-login. Si OK → menu de juegos. Si falla
+                    // (creds caducadas en el server), TryResumeSession borra
+                    // SESSION.DAT internamente; volvemos al menu manual.
+                    Print_SetColor(0x11, 0x33);
+                    Print_SetPosition(8, 184);
+                    { u8 i; for (i = 0; i < 42; i++) Print_DrawChar(' '); }
+                    Print_SetPosition(8, 184);
+                    Print_DrawText("Entrando...");
+                    if (TryResumeSession()) {
+                        DrawMenu();
+                        g_State = ST_MENU;
+                        return;
+                    }
+                    // Resume fallo: redibuja menu sin creds y permite manual.
+                    autoCountdownActive = FALSE;
+                    DrawChoiceMenu(sel);
+                }
+                // Repintar contador cada 60 frames (1s)
+                if ((autoFrames % 60) == 0) {
+                    Print_SetColor(0x11, 0x33);
+                    Print_SetPosition(8, 184);
+                    { u8 i; for (i = 0; i < 42; i++) Print_DrawChar(' '); }
+                    Print_SetPosition(8, 184);
+                    Print_DrawText("Auto-login en ");
+                    PrintAtNum(8 + 14 * FONT_W, 184, (autoFrames + 59) / 60);
+                    Print_SetPosition(8 + 16 * FONT_W, 184);
+                    Print_DrawText("s... (pulsa para cancelar)");
+                }
+            }
+        }
+
+        // Debounce navegacion
+        if (keyDly > 0) keyDly--;
+
+        if (keyDly == 0) {
+            if (Keyboard_IsKeyPressed(KEY_UP) && sel > 0) {
+                sel--; keyDly = 8;
+            } else if (Keyboard_IsKeyPressed(KEY_DOWN) && sel < CHOICE_COUNT - 1) {
+                sel++; keyDly = 8;
+            } else if (Keyboard_IsKeyPressed(KEY_RET) && !prevAnyKey) {
+                // ENTER pulsado: ejecutar accion seleccionada
+                if (sel == CHOICE_LOGIN)    { g_State = ST_LOGIN;    return; }
+                if (sel == CHOICE_REGISTER) { g_State = ST_REGISTER; return; }
+                if (sel == CHOICE_RECOVER)  { g_State = ST_RECOVER;  return; }
+                if (sel == CHOICE_AUTO) {
+                    if (g_HasSavedCreds) {
+                        // ON → OFF: borra SESSION.DAT (incluye creds)
+                        DeleteSessionDat();
+                        // Limpiar mensaje y repintar tick
+                        Print_SetColor(0x11, 0x33);
+                        Print_SetPosition(8, 184);
+                        { u8 i; for (i = 0; i < 42; i++) Print_DrawChar(' '); }
+                    } else {
+                        // OFF sin creds → mensaje "haz LOGIN primero"
+                        Print_SetColor(0x44, 0x33);
+                        VDP_SetPaletteEntry(4, PAL_RED);
+                        Print_SetPosition(8, 184);
+                        { u8 i; for (i = 0; i < 42; i++) Print_DrawChar(' '); }
+                        Print_SetPosition(8, 184);
+                        Print_DrawText("Haz LOGIN primero para activar auto-login");
+                    }
+                    prevSel = 0xFF;  // forzar redibujar tick
+                    keyDly = 12;
+                }
+            } else if (Keyboard_IsKeyPressed(KEY_ESC)) {
+                Bios_Exit(0);
+            }
+        }
+        prevAnyKey = anyKey;
+
+        // Repintar lineas del menu si cambio la seleccion
+        if (sel != prevSel) {
+            if (prevSel != 0xFF) DrawChoiceLine(prevSel, FALSE);
+            DrawChoiceLine(sel, TRUE);
+            // Si CHOICE_AUTO se acaba de toggle, re-pintar tambien esa linea
+            if (prevSel == 0xFF) DrawChoiceLine(CHOICE_AUTO, sel == CHOICE_AUTO);
+            prevSel = sel;
+        }
     }
 }
 
@@ -1504,6 +1748,8 @@ static const c8* RegisterErrText(u8 code) {
     if (code == 1) return "USER ALREADY EXISTS";
     if (code == 2) return "INVALID CHARS IN USER";
     if (code == 3) return "REGISTRATION DISABLED";
+    if (code == 4) return "PENDING ALREADY - REVISA EL QR ANTERIOR";
+    if (code == 5) return "USER NOT FOUND";
     if (code == 0xFF) return "NETWORK ERROR";
     return "";
 }
@@ -1581,7 +1827,25 @@ static void RunLogin(void)
                 g_State = ST_LOGIN;
                 return;
             }
-            WriteSessionDat();   // persistir sesion para skip-login al volver
+            // Preguntar si guardar credenciales para auto-login persistente.
+            // S → SESSION.DAT V2 con user+pass (entra solo hasta que cambies
+            //     la password en el web).
+            // N o ESC → SESSION.DAT V1 (solo session_id, caduca a los 5 min).
+            DrawErrorLine(8, 128, "RECORDAR ESTE USUARIO? [S/N]");
+            bool remember = FALSE;
+            while (1) {
+                Halt();
+                *((u16*)0xF3F8) = *((u16*)0xF3FA);
+                if (Keyboard_IsKeyPressed(KEY_S)) { remember = TRUE;  break; }
+                if (Keyboard_IsKeyPressed(KEY_N)) { remember = FALSE; break; }
+                if (Keyboard_IsKeyPressed(KEY_ESC)) { remember = FALSE; break; }
+            }
+            // Esperar a que se suelte la tecla, evitar rebote al menu.
+            while (Keyboard_IsKeyPressed(KEY_S)
+                || Keyboard_IsKeyPressed(KEY_N)
+                || Keyboard_IsKeyPressed(KEY_ESC)) Halt();
+            if (remember) WriteSessionDat(g_BufUser, g_BufPass);
+            else          WriteSessionDat(NULL, NULL);
             DrainPackets();
             DrawMenu();
             g_State = ST_MENU;
@@ -1662,6 +1926,67 @@ static void RunRegister(void)
         }
         g_LastErrCode = r;
         g_State = ST_REGISTER;
+        return;
+    }
+}
+
+static void RunRecover(void)
+{
+    EnterBBSMode();
+
+    Print_SetColor(0x11, 0x33);
+    Print_SetPosition(56, 16);
+    Print_DrawText("MSXon - RECUPERAR PASSWORD");
+    Print_SetPosition(8, 32);
+    Print_DrawText("------------------------------------------");
+
+    Print_SetColor(0x22, 0x33);
+    Print_SetPosition(8, 56);
+    Print_DrawText("Tipea tu usuario. Te daremos un QR para");
+    Print_SetPosition(8, 68);
+    Print_DrawText("definir una nueva password en el movil.");
+
+    Print_SetPosition(40, 96);
+    Print_DrawText("USERNAME : ");
+
+    Print_SetColor(0x11, 0x33);
+    Print_SetPosition(8, 184);
+    Print_DrawText("[ENTER] submit  [ESC] volver");
+
+    if (g_LastErrCode) {
+        DrawErrorLine(8, 144, RegisterErrText(g_LastErrCode));
+        g_LastErrCode = 0;
+    }
+
+    g_BufUser[0] = 0;
+    u16 inputX = 40 + 11 * FONT_W;
+    u8  yUser  = 96;
+
+    while (1)
+    {
+        u8 result = InputText(g_BufUser, inputX, yUser, 0);
+        DrawField(g_BufUser, StrLen(g_BufUser), inputX, yUser, 0, 0);
+
+        if (result == 1) { g_State = ST_CHOICE; return; }   // ESC
+        // result == 2 (TAB) no aplica con un solo campo: ignorar
+        if (result == 2) continue;
+
+        // ENTER en username: submit
+        DrawErrorLine(8, 144, "VERIFICANDO...");
+        if (!NetConnectAndAuth()) {
+            g_LastErrCode = 0xFF;
+            g_State = ST_RECOVER;
+            return;
+        }
+        u8 r = NetRecover(g_BufUser);
+        if (r == 0) {
+            // REG_PENDING: g_RegToken poblado. Reusamos RunQR (mismo flujo que
+            // registro: render QR con la URL de activacion).
+            g_State = ST_QR;
+            return;
+        }
+        g_LastErrCode = r;
+        g_State = ST_RECOVER;
         return;
     }
 }
@@ -1778,14 +2103,26 @@ void main(void)
     VDP_FillVRAM(0x33, 0x0000, 0x00, VRAM_VISIBLE);
     Print_SetBitmapFont(g_Font_MGL_Sample6);
 
-    // Intento de SESSION_RESUME: si existe SESSION.DAT y el server valida
-    // el session_id, saltamos intro/CHOICE/LOGIN y vamos directo al menu.
-    Print_SetColor(0x11, 0x33);
-    Print_SetPosition(8, 100);
-    Print_DrawText("RESUMING SESSION...");
-    if (TryResumeSession()) {
-        DrawMenu();
-        g_State = ST_MENU;
+    // Intento de "skip intro" si VENGO DE UN JUEGO (segundos despues del ultimo
+    // login). Solo probamos SESSION_RESUME (TTL ~5min en server). NO usamos el
+    // fallback de NetLogin con creds — ese pertenece al countdown del CHOICE.
+    //
+    //  - SESSION_RESUME OK  → vengo de juego, directo al menu sin intro.
+    //  - SESSION_RESUME FAIL → primera vez del dia (o sin SESSION.DAT). Mostramos
+    //                          intro + CHOICE; si hay V2, el CHOICE hara el
+    //                          auto-login con creds tras 2s de countdown.
+    if (ReadSessionDat()) {
+        Print_SetColor(0x11, 0x33);
+        Print_SetPosition(8, 100);
+        Print_DrawText("RESUMING SESSION...");
+        if (NetConnectAndAuth() && NetSessionResume() == 0 && NetFetchGameList()) {
+            DrawMenu();
+            g_State = ST_MENU;
+        } else {
+            // Resume rapido fallo. NO borramos SESSION.DAT — si era V2, el
+            // CHOICE intentara el fallback LOGIN con las creds guardadas.
+            VDP_FillVRAM(0x33, 0x0000, 0x00, VRAM_VISIBLE);
+        }
     }
 
     while(1) {
@@ -1794,6 +2131,7 @@ void main(void)
         if (g_State == ST_CHOICE)   { RunChoice();   continue; }
         if (g_State == ST_LOGIN)    { RunLogin();    continue; }
         if (g_State == ST_REGISTER) { RunRegister(); continue; }
+        if (g_State == ST_RECOVER)  { RunRecover();  continue; }
         if (g_State == ST_QR)       { RunQR();       continue; }
         if (g_State == ST_CHAT)     { RunChat();
             // Tras volver del chat hay que repintar el menu (DrawLobby/DrawMenu
