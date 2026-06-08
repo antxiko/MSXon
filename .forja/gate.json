@@ -1,0 +1,12 @@
+{
+  "_comment": "Gate forense para MSXon. El proyecto compila C a Z80 .COM (MSX-DOS). No hay framework de tests unitarios; el test funcional es la comparacion byte-a-byte del binario producido con la version verificada en HW por el usuario en 4 entornos (ObsoNET, GR8NET, BadCat, ESP01). Ese binario de referencia (obsonapi/msxon6.com) esta anclado al commit del fix INL 2026-06-06.",
+  "min_tests": 1,
+  "checks": [
+    {
+      "name": "binary-cmp",
+      "command": "bash tests/check_binary.sh",
+      "required": true,
+      "is_test": true
+    }
+  ]
+}
