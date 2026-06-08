@@ -168,8 +168,12 @@ static u8 Net_Send(NetConn conn, const u8* data, u16 length)
 {
     int err = tcpip_tcp_send((int)conn, (char*)data, (int)length, 1);
     if(err != ERR_OK) return NET_ERROR;
-    // Flush inmediato — InterNestor/GR8NET pueden bufferizar sin esto
-    tcpip_tcp_flush((int)conn);
+    // [FIX INL 2026-06-06] NO llamar tcpip_tcp_flush aqui: la funcion UNAPI #19 es
+    // TCPIP_TCP_DISCARD (borra el buffer de salida AUN NO enviado), NO un flush. En INL
+    // (envio diferido al processing step del timer) esto BORRABA el paquete antes de
+    // transmitirlo => el server no respondia (A TO). El push=1 del send ya fuerza envio.
+    // GR8NET/UnapiNet no se veian afectados (envian dentro de la propia llamada).
+    // tcpip_tcp_flush((int)conn);
     return NET_OK;
 }
 

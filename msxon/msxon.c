@@ -369,34 +369,46 @@ static u8 InputText(c8* buf, u16 x, u8 y, u8 mask) {
 // Devuelve TRUE si todo OK, FALSE si fallo.
 static bool NetConnectAndAuth(void) {
     u8 tcpState;
+    u8 prevSt;
     u16 timeout;
+    u16 maxAv;
 
     if (g_Online) return TRUE;
 
     DrawErrorLine(8, 128, "1a INIT");
     Log_Init();
     if(Net_Init() != NET_OK) { Log_Write("[MSXON] No UNAPI"); return FALSE; }
+    Log_WriteHex("NI=", g_NetImplCount);
 
     DrawErrorLine(8, 128, "1b WAIT");
-    Wait50();
-    tcpip_get_ipinfo(&g_IpInfo);
+    // [FIX cuelgue 2026-06-06, confirmado en HW] tcpip_get_ipinfo() colgaba DENTRO del
+    // CALSLT a la INL ObsoNET. Era codigo muerto (resultado descartado; Net_GetLocalIP
+    // sin call-sites; Net_Open usa SERVER_IP). Neutralizada -> ya no cuelga. NO reactivar.
+    // tcpip_get_ipinfo(&g_IpInfo);
+    EnableInterrupt();
     Wait50();
 
     DrawErrorLine(8, 128, "1c OPEN");
     g_Conn = Net_Open(SERVER_IP, SERVER_PORT);
-    if(g_Conn == NET_INVALID_CONN) return FALSE;
+    Log_WriteHex("O e=", g_NetLastError);
+    if(g_Conn == NET_INVALID_CONN) { Log_Write("O FAIL"); return FALSE; }
 
     DrawErrorLine(8, 128, "1d ESTAB");
+    prevSt = 0xFE;
     timeout = 0;
     while(timeout < 500) {
+        EnableInterrupt();      // [FIX INL] el wrapper UNAPI deja DI; INL procesa TCP en H.TIMI => sin EI el halt cuelga y la pila no avanza
         Halt();
         tcpState = Net_GetConnState(g_Conn);
+        if(tcpState != prevSt) { Log_WriteHex("st=", tcpState); prevSt = tcpState; }
         if(tcpState == TCP_STATE_ESTABLISHED) break;
-        if(tcpState == 0xFF) return FALSE;
+        if(tcpState == 0xFF) { Log_WriteHex("E e=", g_NetLastError); return FALSE; }
         timeout++;
     }
-    if(timeout >= 500) return FALSE;
+    if(timeout >= 500) { Log_WriteHex("E TO st=", tcpState); Log_WriteHex("cr=", (u8)g_TcpParms.close_reason); return FALSE; }
     DrawErrorLine(8, 128, "1e AUTH");
+    Log_WriteHex("A st=", tcpState);
+    EnableInterrupt();
     Wait50();
 
     g_SendBuf[0] = PROTO_MAGIC_0; g_SendBuf[1] = PROTO_MAGIC_1;
@@ -404,21 +416,26 @@ static bool NetConnectAndAuth(void) {
     g_SendBuf[4] = 0; g_SendBuf[5] = 4;
     g_SendBuf[6] = AUTH_TOKEN_0; g_SendBuf[7] = AUTH_TOKEN_1;
     g_SendBuf[8] = AUTH_TOKEN_2; g_SendBuf[9] = AUTH_TOKEN_3;
-    Net_Send(g_Conn, g_SendBuf, 10);
+    Log_WriteHex("snd=", Net_Send(g_Conn, g_SendBuf, 10));
 
+    maxAv = 0;
     timeout = 0;
-    while(timeout < 250) {
+    while(timeout < 500) {
         u16 avail;
+        EnableInterrupt();      // [FIX INL] EI para que INL procese la recepcion en H.TIMI
         Halt();
         avail = Net_Available(g_Conn);
+        if(avail > maxAv) maxAv = avail;
         if(avail >= 6) {
             u8 hdr[6];
             Net_Recv(g_Conn, hdr, 6);
-            if(hdr[2] == CMD_AUTH_OK) { g_Online = TRUE; return TRUE; }
-            if(hdr[2] == CMD_AUTH_FAIL) return FALSE;
+            Log_WriteHex("R c=", hdr[2]);
+            if(hdr[2] == CMD_AUTH_OK) { Log_Write("OK"); g_Online = TRUE; return TRUE; }
+            if(hdr[2] == CMD_AUTH_FAIL) { Log_Write("A REJ"); return FALSE; }
         }
         timeout++;
     }
+    Log_WriteHex("A TO av=", (u8)maxAv);
     return FALSE;
 }
 
@@ -427,6 +444,7 @@ static bool NetConnectAndAuth(void) {
 static bool NetRecvPacket(u8* outHdr, u8* outPayload, u16 timeoutHalts) {
     u16 t = 0;
     while (t < timeoutHalts) {
+        EnableInterrupt();      // [FIX INL] el wrapper deja DI; INL necesita EI para procesar rx en H.TIMI
         Halt();
         if (Net_Available(g_Conn) >= 6) {
             Net_Recv(g_Conn, outHdr, 6);
@@ -434,7 +452,7 @@ static bool NetRecvPacket(u8* outHdr, u8* outPayload, u16 timeoutHalts) {
                 t++; continue;
             }
             if (outHdr[5] > 0) {
-                while (Net_Available(g_Conn) < outHdr[5]) Halt();
+                while (Net_Available(g_Conn) < outHdr[5]) { EnableInterrupt(); Halt(); }
                 Net_Recv(g_Conn, outPayload, outHdr[5]);
             }
             return TRUE;

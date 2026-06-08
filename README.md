@@ -1,8 +1,8 @@
-# MSXon — v0.11
+# MSXon — v0.12
 
 Plataforma de juegos online multijugador para ordenadores **MSX2 reales** sobre TCP/IP.
 
-> **Estado v0.11 (2026-05-24)**: gestión de sesión completa en el cliente. La pantalla CHOICE pasa a ser un menú navegable con cursores y ENTER con cuatro opciones: LOGIN, REGISTRAR, RECUPERAR CONTRASEÑA y un tick LOGIN AUTOMATICO. Si el usuario tiene credenciales guardadas, MSXon entra solo al menú de juegos al volver de una partida (resume rápido) y al arrancar desde cero ofrece un countdown de 2 segundos antes del auto-login (cancelable con cualquier tecla). Recuperar contraseña funciona end-to-end (MSX → server → QR → web → vuelta al MSX) preservando el rol del usuario.
+> **Estado v0.12 (2026-06-08)**: soporte para la tarjeta **ObsoNET** (pila TCP/IP por software InterNestor Lite). Tres ajustes en el adaptador UNAPI de MSXon evitan el cuelgue del Z80 cuando la pila TCP se procesa en el background por la interrupción del timer: (1) eliminada la llamada a `tcpip_get_ipinfo` que colgaba dentro del CALSLT a INL y era código muerto, (2) `EnableInterrupt()` antes de cada `Halt()` en bucles de espera de red (CALSLT retorna con DI), y (3) eliminada la llamada a `tcpip_tcp_flush` en `Net_Send` (la función UNAPI #19 es realmente `TCPIP_TCP_DISCARD` y borraba el paquete antes de transmitirlo). Verificado en HW real: **ObsoNET, GR8NET, BadCat y ESP01**. En **ObsoNET**, Tetris y Burdyn van más pausados por límite del cartucho (Z80 gestiona la pila TCP en software); damas, parchís y texas son perfectamente jugables aunque con un ritmo más relajado. **Conocido**: openMSXnet (emulador con bridge UnapiNet, entorno de test) detecta `DI; HALT` post-LOGIN como warning y bloquea el flujo de sala — no afecta a usuarios en HW real, solo al banco de pruebas software.
 
 ```
   MSX ──ESP-01 WiFi──┐                 ┌──Badcat──── MSX

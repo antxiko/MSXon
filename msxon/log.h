@@ -17,7 +17,7 @@
 #include "dos.h"
 
 // Nombre del fichero (8.3, directorio actual)
-#define LOG_FILENAME    "TEXAS.LOG"
+#define LOG_FILENAME    "MSXON.LOG"
 
 // Handle del fichero (0xFF = cerrado)
 #define LOG_CLOSED      0xFF
